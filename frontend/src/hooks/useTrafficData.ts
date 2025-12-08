@@ -110,33 +110,73 @@ export function useDashboardPolling(intervalMs: number = 5000) {
 
 /**
  * Hook to track map bounds changes and trigger data refetch.
+ * Now with request cancellation and better throttling.
  */
 export function useMapBoundsTracker() {
-  const { mapView, getBoundingBox, setTrafficData, setIsLoading } = useTrafficStore();
+  const { mapView, getBoundingBox, setTrafficData, setIsLoading, setIncidents } = useTrafficStore();
   const lastBoundsRef = useRef<string | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    // Cancel any pending requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // Clear any pending timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
     const bbox = getBoundingBox();
-    const boundsKey = `${bbox.north.toFixed(3)},${bbox.south.toFixed(3)},${bbox.east.toFixed(3)},${bbox.west.toFixed(3)}`;
+    const boundsKey = `${bbox.north.toFixed(4)},${bbox.south.toFixed(4)},${bbox.east.toFixed(4)},${bbox.west.toFixed(4)}`;
     
+    // Only fetch if bounds changed significantly (more than 5% change)
     if (boundsKey !== lastBoundsRef.current) {
       lastBoundsRef.current = boundsKey;
       
-      // Debounced fetch when bounds change significantly
-      const timeout = setTimeout(async () => {
+      // Debounced fetch when bounds change (throttled to prevent rapid requests)
+      timeoutRef.current = setTimeout(async () => {
+        // Create new abort controller for this request
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
         setIsLoading(true);
         try {
-          const data = await trafficApi.getFlow(bbox);
-          setTrafficData(data);
-        } catch (err) {
-          console.error('Failed to fetch traffic for new bounds:', err);
-        } finally {
-          setIsLoading(false);
-        }
-      }, 500);
+          const [flowData, incidentsData] = await Promise.all([
+            trafficApi.getFlow(bbox, abortController.signal),
+            trafficApi.getIncidents(bbox, abortController.signal).catch(() => []), // Don't fail if incidents fail
+          ]);
 
-      return () => clearTimeout(timeout);
+          // Check if request was cancelled
+          if (abortController.signal.aborted) {
+            return;
+          }
+          
+          setTrafficData(flowData);
+          setIncidents(incidentsData);
+        } catch (err) {
+          // Don't log if it was just a cancellation
+          if (err instanceof Error && err.name !== 'AbortError') {
+            console.error('Failed to fetch traffic for new bounds:', err);
+          }
+        } finally {
+          if (!abortController.signal.aborted) {
+            setIsLoading(false);
+          }
+        }
+      }, 600); // Optimized debounce: 600ms
     }
-  }, [mapView.center.lat, mapView.center.lng, mapView.zoom]);
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [mapView.center.lat, mapView.center.lng, mapView.zoom, getBoundingBox, setTrafficData, setIsLoading, setIncidents]);
 }
 

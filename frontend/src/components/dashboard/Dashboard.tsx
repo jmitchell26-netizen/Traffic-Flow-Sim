@@ -12,7 +12,6 @@ import {
   Activity,
   Car,
   Clock,
-  Fuel,
   Gauge,
   TrendingDown,
   TrendingUp,
@@ -25,8 +24,6 @@ import {
   Line,
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -316,7 +313,6 @@ function EmissionsPanel() {
 
 export function Dashboard() {
   const dashboardData = useTrafficStore((s) => s.dashboardData);
-  const trafficData = useTrafficStore((s) => s.trafficData);
   const simulationState = useTrafficStore((s) => s.simulationState);
 
   const metrics = dashboardData?.current_metrics;

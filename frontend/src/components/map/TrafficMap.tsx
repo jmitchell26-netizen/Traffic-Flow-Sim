@@ -9,10 +9,12 @@
  * - Interactive segment selection
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet';
-import { Layers, ZoomIn, ZoomOut, Locate, Plus } from 'lucide-react';
+import { Layers, ZoomIn, ZoomOut, Locate, Plus, Loader2, RefreshCw } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
+import { useMapBoundsTracker } from '../../hooks/useTrafficData';
+import { trafficApi } from '../../services/api';
 import {
   CONGESTION_COLORS,
   TRAFFIC_LIGHT_COLORS,
@@ -25,7 +27,11 @@ import {
   type TrafficIncident,
 } from '../../types/traffic';
 import { SegmentPopup } from './SegmentPopup';
-import { VehicleMarker } from './VehicleMarker';
+import { CanvasVehicleLayer } from './CanvasVehicleLayer';
+import {
+  filterSegmentsByViewport,
+  filterSegmentsByZoom,
+} from '../../utils/viewportUtils';
 
 // ============================================================
 // MAP CONTROLLER (handles view updates)
@@ -35,24 +41,47 @@ function MapController() {
   const map = useMap();
   const mapView = useTrafficStore((s) => s.mapView);
   const setMapView = useTrafficStore((s) => s.setMapView);
+  const isInitializedRef = useRef(false);
 
+  // Initialize map view
   useEffect(() => {
-    map.setView([mapView.center.lat, mapView.center.lng], mapView.zoom);
+    if (!isInitializedRef.current) {
+      map.setView([mapView.center.lat, mapView.center.lng], mapView.zoom);
+      isInitializedRef.current = true;
+    }
   }, [mapView.center.lat, mapView.center.lng, mapView.zoom, map]);
 
+  // Update store when map moves (debounced)
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const handleMoveEnd = () => {
-      const center = map.getCenter();
-      const zoom = map.getZoom();
-      setMapView({
-        center: { lat: center.lat, lng: center.lng },
-        zoom,
-      });
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        const center = map.getCenter();
+        const zoom = map.getZoom();
+        const bounds = map.getBounds();
+        
+        setMapView({
+          center: { lat: center.lat, lng: center.lng },
+          zoom,
+          bounds: {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest(),
+          },
+        });
+      }, 300); // Debounce for 300ms
     };
 
     map.on('moveend', handleMoveEnd);
+    map.on('zoomend', handleMoveEnd);
+
     return () => {
+      clearTimeout(timeoutId);
       map.off('moveend', handleMoveEnd);
+      map.off('zoomend', handleMoveEnd);
     };
   }, [map, setMapView]);
 
@@ -68,15 +97,70 @@ interface SegmentLayerProps {
   onSelect: (segment: RoadSegment) => void;
 }
 
-function SegmentLayer({ segments, onSelect }: SegmentLayerProps) {
+// Memoized segment layer with viewport culling
+const SegmentLayer = memo(function SegmentLayer({ segments, onSelect }: SegmentLayerProps) {
+  const map = useMap();
+
+  // Filter and optimize segments based on viewport and zoom
+  const visibleSegments = useMemo(() => {
+    // Get current map bounds
+    const bounds = map.getBounds();
+    const zoom = map.getZoom();
+
+    const bbox = {
+      north: bounds.getNorth(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      west: bounds.getWest(),
+    };
+
+    // Filter invalid coordinates
+    const validSegments = segments.filter(
+      (segment) =>
+        segment.coordinates &&
+        segment.coordinates.length >= 2 &&
+        segment.coordinates.every(
+          (c) =>
+            typeof c.lat === 'number' &&
+            typeof c.lng === 'number' &&
+            !isNaN(c.lat) &&
+            !isNaN(c.lng) &&
+            c.lat >= -90 &&
+            c.lat <= 90 &&
+            c.lng >= -180 &&
+            c.lng <= 180
+        )
+    );
+
+    // Apply viewport culling
+    const viewportFiltered = filterSegmentsByViewport(validSegments, bbox);
+
+    // Apply zoom-based LOD
+    return filterSegmentsByZoom(viewportFiltered, zoom);
+  }, [segments, map]);
+
+  // Memoize coordinate transformations
+  const segmentPolylines = useMemo(() => {
+    return visibleSegments.map((segment) => ({
+      id: segment.id,
+      positions: segment.coordinates.map((c) => [c.lat, c.lng] as [number, number]),
+      color: CONGESTION_COLORS[segment.congestion_level],
+      segment,
+    }));
+  }, [visibleSegments]);
+
+  if (segmentPolylines.length === 0) {
+    return null;
+  }
+
   return (
     <>
-      {segments.map((segment) => (
+      {segmentPolylines.map(({ id, positions, color, segment }) => (
         <Polyline
-          key={segment.id}
-          positions={segment.coordinates.map((c) => [c.lat, c.lng])}
+          key={id}
+          positions={positions}
           pathOptions={{
-            color: CONGESTION_COLORS[segment.congestion_level],
+            color,
             weight: 5,
             opacity: 0.8,
           }}
@@ -91,35 +175,30 @@ function SegmentLayer({ segments, onSelect }: SegmentLayerProps) {
       ))}
     </>
   );
-}
+});
 
 // ============================================================
-// VEHICLE LAYER
+// VEHICLE LAYER (Now using Canvas for performance)
 // ============================================================
 
 interface VehicleLayerProps {
   vehicles: SimulatedVehicle[];
 }
 
-function VehicleLayer({ vehicles }: VehicleLayerProps) {
-  return (
-    <>
-      {vehicles.slice(0, 100).map((vehicle) => (
-        <VehicleMarker key={vehicle.id} vehicle={vehicle} />
-      ))}
-    </>
-  );
-}
+// Memoized vehicle layer - now uses Canvas instead of React components
+const VehicleLayer = memo(function VehicleLayer({ vehicles }: VehicleLayerProps) {
+  return <CanvasVehicleLayer vehicles={vehicles} />;
+});
 
 // ============================================================
-// TRAFFIC LIGHT LAYER
+// TRAFFIC LIGHT LAYER (Memoized)
 // ============================================================
 
 interface TrafficLightLayerProps {
   lights: TrafficLight[];
 }
 
-function TrafficLightLayer({ lights }: TrafficLightLayerProps) {
+const TrafficLightLayer = memo(function TrafficLightLayer({ lights }: TrafficLightLayerProps) {
   return (
     <>
       {lights.map((light) => (
@@ -148,17 +227,17 @@ function TrafficLightLayer({ lights }: TrafficLightLayerProps) {
       ))}
     </>
   );
-}
+});
 
 // ============================================================
-// INCIDENT LAYER
+// INCIDENT LAYER (Memoized)
 // ============================================================
 
 interface IncidentLayerProps {
   incidents: TrafficIncident[];
 }
 
-function IncidentLayer({ incidents }: IncidentLayerProps) {
+const IncidentLayer = memo(function IncidentLayer({ incidents }: IncidentLayerProps) {
   const severityColors = {
     1: '#f59e0b',
     2: '#f97316',
@@ -194,7 +273,7 @@ function IncidentLayer({ incidents }: IncidentLayerProps) {
       ))}
     </>
   );
-}
+});
 
 // ============================================================
 // MAP CONTROLS
@@ -203,6 +282,10 @@ function IncidentLayer({ incidents }: IncidentLayerProps) {
 function MapControls() {
   const mapView = useTrafficStore((s) => s.mapView);
   const setMapView = useTrafficStore((s) => s.setMapView);
+  const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
+  const setTrafficData = useTrafficStore((s) => s.setTrafficData);
+  const setIsLoading = useTrafficStore((s) => s.setIsLoading);
+  const isLoading = useTrafficStore((s) => s.isLoading);
 
   const handleZoomIn = () => setMapView({ zoom: mapView.zoom + 1 });
   const handleZoomOut = () => setMapView({ zoom: Math.max(1, mapView.zoom - 1) });
@@ -213,23 +296,49 @@ function MapControls() {
     });
   };
 
+  const handleRefresh = async () => {
+    setIsLoading(true);
+    try {
+      const bbox = getBoundingBox();
+      const data = await trafficApi.getFlow(bbox);
+      setTrafficData(data);
+    } catch (err) {
+      console.error('Failed to refresh:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
       <button
+        onClick={handleRefresh}
+        disabled={isLoading}
+        className={`w-10 h-10 bg-dash-card border border-dash-border rounded-lg flex items-center justify-center text-dash-text hover:bg-dash-border transition-colors ${
+          isLoading ? 'opacity-50 cursor-not-allowed' : ''
+        }`}
+        title="Refresh traffic data"
+      >
+        <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+      </button>
+      <button
         onClick={handleZoomIn}
         className="w-10 h-10 bg-dash-card border border-dash-border rounded-lg flex items-center justify-center text-dash-text hover:bg-dash-border transition-colors"
+        title="Zoom in"
       >
         <ZoomIn className="w-5 h-5" />
       </button>
       <button
         onClick={handleZoomOut}
         className="w-10 h-10 bg-dash-card border border-dash-border rounded-lg flex items-center justify-center text-dash-text hover:bg-dash-border transition-colors"
+        title="Zoom out"
       >
         <ZoomOut className="w-5 h-5" />
       </button>
       <button
         onClick={handleRecenter}
         className="w-10 h-10 bg-dash-card border border-dash-border rounded-lg flex items-center justify-center text-dash-text hover:bg-dash-border transition-colors"
+        title="Recenter map"
       >
         <Locate className="w-5 h-5" />
       </button>
@@ -280,15 +389,23 @@ export function TrafficMap() {
   const simulationState = useTrafficStore((s) => s.simulationState);
   const incidents = useTrafficStore((s) => s.incidents);
   const mapView = useTrafficStore((s) => s.mapView);
+  const isLoading = useTrafficStore((s) => s.isLoading);
   const setSelectedFeature = useTrafficStore((s) => s.setSelectedFeature);
+  const setTrafficData = useTrafficStore((s) => s.setTrafficData);
+  const setIsLoading = useTrafficStore((s) => s.setIsLoading);
+  const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
 
-  const handleSegmentSelect = (segment: RoadSegment) => {
+  // Track map bounds changes and fetch new data (debounced)
+  // This hook handles both traffic flow and incidents
+  useMapBoundsTracker();
+
+  const handleSegmentSelect = useCallback((segment: RoadSegment) => {
     setSelectedFeature({
       type: 'segment',
       id: segment.id,
       data: segment,
     });
-  };
+  }, [setSelectedFeature]);
 
   return (
     <div className="relative w-full h-full">
@@ -334,25 +451,47 @@ export function TrafficMap() {
       <MapControls />
       <MapLegend />
 
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 z-[2000] bg-dash-bg/50 backdrop-blur-sm flex items-center justify-center">
+          <div className="bg-dash-card border border-dash-border rounded-lg p-6 flex flex-col items-center gap-3">
+            <Loader2 className="w-8 h-8 text-dash-accent animate-spin" />
+            <span className="text-sm text-dash-text">Loading traffic data...</span>
+          </div>
+        </div>
+      )}
+
       {/* Stats overlay */}
       <div className="absolute top-4 left-4 z-[1000] bg-dash-card/90 backdrop-blur-sm border border-dash-border rounded-lg p-4">
         <div className="text-xs text-dash-muted mb-2">Traffic Summary</div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
           <div className="text-dash-muted">Segments:</div>
           <div className="text-dash-text font-medium">
-            {trafficData?.total_segments ?? '—'}
+            {trafficData?.total_segments ?? trafficData?.segments?.length ?? 0}
           </div>
           <div className="text-dash-muted">Congested:</div>
           <div className="text-congestion-heavy font-medium">
-            {trafficData?.congested_segments ?? '—'}
+            {trafficData?.congested_segments ?? 
+             trafficData?.segments?.filter(s => s.congestion_level === 'heavy' || s.congestion_level === 'severe').length ?? 0}
           </div>
           <div className="text-dash-muted">Avg Speed:</div>
           <div className="text-dash-accent font-medium">
             {trafficData
               ? `${Math.round(trafficData.average_speed_ratio * 100)}%`
+              : trafficData?.segments?.length
+              ? `${Math.round(
+                  (trafficData.segments.reduce((sum, s) => sum + s.speed_ratio, 0) /
+                    trafficData.segments.length) *
+                    100
+                )}%`
               : '—'}
           </div>
         </div>
+        {trafficData?.segments && trafficData.segments.length === 0 && (
+          <div className="mt-2 text-xs text-yellow-400">
+            No traffic data available for this area
+          </div>
+        )}
       </div>
     </div>
   );

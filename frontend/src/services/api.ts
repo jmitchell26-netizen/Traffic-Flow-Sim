@@ -29,7 +29,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 async function fetchApi<T>(
   endpoint: string,
-  options?: RequestInit
+  options?: RequestInit & { signal?: AbortSignal }
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
   
@@ -38,10 +38,15 @@ async function fetchApi<T>(
       'Content-Type': 'application/json',
       ...options?.headers,
     },
+    signal: options?.signal,
     ...options,
   });
   
   if (!response.ok) {
+    // Don't parse error if request was aborted
+    if (options?.signal?.aborted) {
+      throw new Error('Request aborted');
+    }
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
     throw new Error(error.detail || `API Error: ${response.status}`);
   }
@@ -57,14 +62,14 @@ export const trafficApi = {
   /**
    * Get real-time traffic flow data for a bounding box
    */
-  async getFlow(bbox: BoundingBox): Promise<TrafficFlowData> {
+  async getFlow(bbox: BoundingBox, signal?: AbortSignal): Promise<TrafficFlowData> {
     const params = new URLSearchParams({
       north: bbox.north.toString(),
       south: bbox.south.toString(),
       east: bbox.east.toString(),
       west: bbox.west.toString(),
     });
-    return fetchApi<TrafficFlowData>(`/traffic/flow?${params}`);
+    return fetchApi<TrafficFlowData>(`/traffic/flow?${params}`, { signal });
   },
   
   /**
@@ -82,14 +87,14 @@ export const trafficApi = {
   /**
    * Get traffic incidents in an area
    */
-  async getIncidents(bbox: BoundingBox): Promise<TrafficIncident[]> {
+  async getIncidents(bbox: BoundingBox, signal?: AbortSignal): Promise<TrafficIncident[]> {
     const params = new URLSearchParams({
       north: bbox.north.toString(),
       south: bbox.south.toString(),
       east: bbox.east.toString(),
       west: bbox.west.toString(),
     });
-    return fetchApi<TrafficIncident[]>(`/traffic/incidents?${params}`);
+    return fetchApi<TrafficIncident[]>(`/traffic/incidents?${params}`, { signal });
   },
   
   /**

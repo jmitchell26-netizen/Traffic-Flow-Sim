@@ -115,45 +115,74 @@ class TomTomService:
     async def get_traffic_flow_tiles(
         self,
         bbox: BoundingBox,
-        style: str = "relative0"
+        style: str = "relative0",
+        grid_size: int = 8
     ) -> TrafficFlowData:
         """
         Get traffic flow data for a bounding box region.
-        Uses the Traffic Flow Tiles API for broader coverage.
+        Uses parallel sampling across a grid for comprehensive coverage.
         
         Args:
             bbox: Geographic bounding box
             style: Flow style (relative0, relative-delay, reduced-sensitivity)
+            grid_size: Number of points per dimension (default 8 = 64 points)
         
         Returns:
             TrafficFlowData with all segments in the region
         """
-        # For broader coverage, we sample multiple points within the bbox
-        segments = []
+        import asyncio
         
         # Create a grid of sample points
-        lat_step = (bbox.north - bbox.south) / 5
-        lng_step = (bbox.east - bbox.west) / 5
+        lat_step = (bbox.north - bbox.south) / grid_size
+        lng_step = (bbox.east - bbox.west) / grid_size
         
-        for i in range(5):
-            for j in range(5):
+        # Generate all sample points
+        points = []
+        for i in range(grid_size):
+            for j in range(grid_size):
                 point = Coordinates(
                     lat=bbox.south + lat_step * (i + 0.5),
                     lng=bbox.west + lng_step * (j + 0.5)
                 )
-                segment = await self.get_flow_segment_data(point)
-                if segment:
-                    # Avoid duplicates
-                    if not any(s.id == segment.id for s in segments):
-                        segments.append(segment)
+                points.append(point)
+        
+        # Fetch all segments in parallel (with concurrency limit to avoid rate limits)
+        semaphore = asyncio.Semaphore(10)  # Max 10 concurrent requests
+        
+        async def fetch_with_limit(point: Coordinates):
+            async with semaphore:
+                return await self.get_flow_segment_data(point, zoom=12)
+        
+        # Fetch all segments in parallel
+        results = await asyncio.gather(*[fetch_with_limit(p) for p in points], return_exceptions=True)
+        
+        # Filter out None results and exceptions, and deduplicate
+        segments = []
+        seen_ids = set()
+        
+        for result in results:
+            if isinstance(result, Exception):
+                # Log but continue
+                print(f"Error fetching segment: {result}")
+                continue
+            
+            if result and result.id not in seen_ids:
+                # Validate segment has valid coordinates
+                if result.coordinates and len(result.coordinates) >= 2:
+                    seen_ids.add(result.id)
+                    segments.append(result)
         
         # Calculate aggregate metrics
-        total_ratio = sum(s.speed_ratio for s in segments)
-        avg_ratio = total_ratio / len(segments) if segments else 0
-        congested = sum(
-            1 for s in segments 
-            if s.congestion_level in [CongestionLevel.HEAVY, CongestionLevel.SEVERE]
-        )
+        if segments:
+            total_ratio = sum(s.speed_ratio for s in segments)
+            avg_ratio = total_ratio / len(segments)
+            congested = sum(
+                1 for s in segments 
+                if s.congestion_level in [CongestionLevel.HEAVY, CongestionLevel.SEVERE]
+            )
+        else:
+            avg_ratio = 0
+            congested = 0
         
         return TrafficFlowData(
             segments=segments,

@@ -61,8 +61,8 @@ interface TrafficStore {
   isPanelOpen: boolean;
   togglePanel: () => void;
   
-  activeTab: 'map' | 'dashboard' | 'simulation';
-  setActiveTab: (tab: 'map' | 'dashboard' | 'simulation') => void;
+  activeTab: 'map' | 'dashboard' | 'simulation' | 'game';
+  setActiveTab: (tab: 'map' | 'dashboard' | 'simulation' | 'game') => void;
   
   // Data loading
   isLoading: boolean;

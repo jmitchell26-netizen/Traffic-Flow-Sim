@@ -9,11 +9,12 @@
  */
 
 import { useEffect } from 'react';
-import { Map, BarChart3, Settings2, Activity, AlertTriangle } from 'lucide-react';
+import { Map, BarChart3, Settings2, Activity, AlertTriangle, Gamepad2 } from 'lucide-react';
 import { useTrafficStore } from './stores/trafficStore';
 import { TrafficMap } from './components/map/TrafficMap';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { SimulationPanel } from './components/simulation/SimulationPanel';
+import { GameMode } from './components/game/GameMode';
 import { trafficApi, dashboardApi } from './services/api';
 
 function App() {
@@ -73,6 +74,7 @@ function App() {
     { id: 'map' as const, label: 'Map View', icon: Map },
     { id: 'dashboard' as const, label: 'Dashboard', icon: BarChart3 },
     { id: 'simulation' as const, label: 'Simulation', icon: Settings2 },
+    { id: 'game' as const, label: 'Game Mode', icon: Gamepad2 },
   ];
 
   return (
@@ -155,6 +157,7 @@ function App() {
         {activeTab === 'map' && <TrafficMap />}
         {activeTab === 'dashboard' && <Dashboard />}
         {activeTab === 'simulation' && <SimulationPanel />}
+        {activeTab === 'game' && <GameMode />}
       </main>
 
       {/* Footer */}

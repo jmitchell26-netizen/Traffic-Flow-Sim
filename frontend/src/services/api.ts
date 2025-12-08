@@ -27,30 +27,56 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 // HTTP CLIENT
 // ============================================================
 
+/**
+ * Generic API fetch function with error handling and abort signal support.
+ * 
+ * This is the base function used by all API methods. It handles:
+ * - URL construction with base path
+ * - Request headers (JSON content type)
+ * - Abort signal for request cancellation
+ * - Error parsing and formatting
+ * - Response JSON parsing
+ * 
+ * @template T - Type of data expected in response
+ * @param endpoint - API endpoint path (e.g., '/traffic/flow')
+ * @param options - Fetch options including optional AbortSignal
+ * @returns Promise resolving to typed response data
+ * @throws Error if request fails or is aborted
+ * 
+ * @example
+ * ```ts
+ * const data = await fetchApi<TrafficFlowData>('/traffic/flow', { signal });
+ * ```
+ */
 async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit & { signal?: AbortSignal }
 ): Promise<T> {
+  // Construct full URL from base URL and endpoint
   const url = `${API_BASE_URL}${endpoint}`;
   
+  // Make fetch request with headers and abort signal
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
-      ...options?.headers,
+      ...options?.headers,  // Allow custom headers to override
     },
-    signal: options?.signal,
-    ...options,
+    signal: options?.signal,  // AbortSignal for cancellation
+    ...options,  // Spread other options (method, body, etc.)
   });
   
+  // Handle HTTP errors
   if (!response.ok) {
-    // Don't parse error if request was aborted
+    // Don't parse error if request was aborted (expected behavior)
     if (options?.signal?.aborted) {
       throw new Error('Request aborted');
     }
+    // Try to parse error message from response, fallback to status code
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
     throw new Error(error.detail || `API Error: ${response.status}`);
   }
   
+  // Parse and return JSON response
   return response.json();
 }
 

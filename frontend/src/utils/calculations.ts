@@ -1,25 +1,56 @@
 /**
  * Utility functions for traffic calculations.
+ * 
+ * This module provides mathematical and geometric calculations used throughout
+ * the application for:
+ * - Distance calculations (Haversine formula)
+ * - Coordinate transformations
+ * - Traffic metrics (speed, flow, congestion)
+ * - Emissions and fuel consumption estimates
+ * - Spatial queries (nearest segment, point-in-bounds)
  */
 
 import type { Coordinates, RoadSegment, SimulatedVehicle } from '../types/traffic';
 
 /**
  * Calculate the distance between two coordinates in meters using Haversine formula.
+ * 
+ * The Haversine formula calculates the great-circle distance between two points
+ * on a sphere (Earth), accounting for the planet's curvature. This is more
+ * accurate than simple Euclidean distance for geographic coordinates.
+ * 
+ * @param a - First coordinate point (latitude, longitude)
+ * @param b - Second coordinate point (latitude, longitude)
+ * @returns Distance in meters
+ * 
+ * @example
+ * ```ts
+ * const distance = calculateDistance(
+ *   { lat: 40.7128, lng: -74.0060 },
+ *   { lat: 40.7580, lng: -73.9855 }
+ * );
+ * // Returns: ~5500 meters (5.5 km)
+ * ```
  */
 export function calculateDistance(a: Coordinates, b: Coordinates): number {
   const R = 6371000; // Earth's radius in meters
+  
+  // Convert degrees to radians for trigonometric functions
   const lat1 = toRadians(a.lat);
   const lat2 = toRadians(b.lat);
   const deltaLat = toRadians(b.lat - a.lat);
   const deltaLng = toRadians(b.lng - a.lng);
 
+  // Haversine formula: calculates distance on sphere
+  // h = haversine of central angle
   const h =
     Math.sin(deltaLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
   
+  // Calculate central angle
   const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 
+  // Distance = radius * central angle
   return R * c;
 }
 

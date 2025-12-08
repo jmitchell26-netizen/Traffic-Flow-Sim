@@ -44,32 +44,41 @@ interface GameState {
   bestScore: number;
 }
 
+/**
+ * Initial game objectives/challenges.
+ * 
+ * Players complete these objectives to earn points and progress.
+ * Each objective has:
+ * - A target value to achieve
+ * - A reward in points
+ * - A completion status
+ */
 const INITIAL_OBJECTIVES: GameObjective[] = [
   {
     id: 'reduce-congestion',
     title: 'Reduce Congestion',
     description: 'Get average speed ratio above 80%',
-    target: 80,
+    target: 80,  // Target: 80% of free-flow speed
     current: 0,
-    reward: 100,
+    reward: 100,  // Points awarded when completed
     completed: false,
   },
   {
     id: 'manage-intersections',
     title: 'Manage Intersections',
     description: 'Keep wait times below 30 seconds',
-    target: 30,
+    target: 30,  // Target: max 30 seconds wait time
     current: 0,
-    reward: 150,
+    reward: 150,  // Higher reward for more challenging objective
     completed: false,
   },
   {
     id: 'clear-incidents',
     title: 'Clear Incidents',
     description: 'Remove 3 traffic incidents',
-    target: 3,
+    target: 3,  // Target: remove 3 incidents
     current: 0,
-    reward: 200,
+    reward: 200,  // Highest reward for active management
     completed: false,
   },
 ];
@@ -132,37 +141,55 @@ export function GameMode() {
   const dashboardData = useTrafficStore((s) => s.dashboardData);
   const simulationState = useTrafficStore((s) => s.simulationState);
 
-  // Update game state based on simulation metrics
+  /**
+   * Update game state based on current simulation metrics.
+   * 
+   * This effect runs whenever dashboard metrics change and:
+   * - Updates objective progress based on current metrics
+   * - Checks for objective completion and awards points
+   * - Checks for achievement unlocks
+   * - Updates best score if current score exceeds it
+   * - Saves game state to localStorage
+   */
   useEffect(() => {
+    // Don't update if no metrics available yet
     if (!dashboardData?.current_metrics) return;
 
     const metrics = dashboardData.current_metrics;
     const newState = { ...gameState };
 
-    // Update objectives
+    // Update each objective's progress and check for completion
     newState.objectives = newState.objectives.map((obj) => {
+      // Skip already completed objectives
       if (obj.completed) return obj;
 
       let current = obj.current;
       let completed = false;
 
+      // Update current value and check completion based on objective type
       switch (obj.id) {
         case 'reduce-congestion':
+          // Use average speed as current value
           current = metrics.average_speed;
+          // Completed if speed >= target (80%)
           completed = current >= obj.target;
           break;
         case 'manage-intersections':
+          // Use average wait time as current value
           current = metrics.average_wait_time;
+          // Completed if wait time <= target (30 seconds)
           completed = current <= obj.target;
           break;
         case 'clear-incidents':
-          // This would need to track incident removals
+          // TODO: Track incident removals separately
+          // This would require additional state tracking
           break;
       }
 
+      // Award points when objective is first completed
       if (completed && !obj.completed) {
         newState.score += obj.reward;
-        newState.totalVehiclesHelped += 10;
+        newState.totalVehiclesHelped += 10;  // Bonus: helped vehicles
       }
 
       return { ...obj, current, completed };

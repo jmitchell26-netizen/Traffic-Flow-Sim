@@ -37,13 +37,25 @@ import {
 // MAP CONTROLLER (handles view updates)
 // ============================================================
 
+/**
+ * MapController Component
+ * 
+ * Manages synchronization between Leaflet map instance and Zustand store.
+ * Handles:
+ * - Initial map view setup
+ * - Debounced updates when map moves/zooms
+ * - Bounds tracking for viewport culling
+ */
 function MapController() {
   const map = useMap();
   const mapView = useTrafficStore((s) => s.mapView);
   const setMapView = useTrafficStore((s) => s.setMapView);
   const isInitializedRef = useRef(false);
 
-  // Initialize map view
+  /**
+   * Initialize map view on first render.
+   * Sets the initial center and zoom from store state.
+   */
   useEffect(() => {
     if (!isInitializedRef.current) {
       map.setView([mapView.center.lat, mapView.center.lng], mapView.zoom);
@@ -51,17 +63,26 @@ function MapController() {
     }
   }, [mapView.center.lat, mapView.center.lng, mapView.zoom, map]);
 
-  // Update store when map moves (debounced)
+  /**
+   * Update store when map moves or zooms (debounced).
+   * Debouncing prevents excessive store updates during rapid panning.
+   * Updates center, zoom, and bounds for viewport culling.
+   */
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
 
     const handleMoveEnd = () => {
+      // Clear any pending update
       clearTimeout(timeoutId);
+      
+      // Debounce: wait 300ms after movement stops before updating store
+      // This prevents updates during rapid panning/zooming
       timeoutId = setTimeout(() => {
         const center = map.getCenter();
         const zoom = map.getZoom();
         const bounds = map.getBounds();
         
+        // Update store with current map state
         setMapView({
           center: { lat: center.lat, lng: center.lng },
           zoom,
@@ -72,12 +93,14 @@ function MapController() {
             west: bounds.getWest(),
           },
         });
-      }, 300); // Debounce for 300ms
+      }, 300); // 300ms debounce delay
     };
 
+    // Listen for map movement and zoom events
     map.on('moveend', handleMoveEnd);
     map.on('zoomend', handleMoveEnd);
 
+    // Cleanup: remove listeners and clear timeout
     return () => {
       clearTimeout(timeoutId);
       map.off('moveend', handleMoveEnd);
@@ -85,7 +108,7 @@ function MapController() {
     };
   }, [map, setMapView]);
 
-  return null;
+  return null; // This component doesn't render anything
 }
 
 // ============================================================
@@ -97,16 +120,29 @@ interface SegmentLayerProps {
   onSelect: (segment: RoadSegment) => void;
 }
 
-// Memoized segment layer with viewport culling
+/**
+ * SegmentLayer Component (Memoized)
+ * 
+ * Renders road segments as polylines on the map.
+ * Optimizations:
+ * - Viewport culling: Only renders segments visible in current viewport
+ * - Level of Detail (LOD): Shows fewer segments at low zoom levels
+ * - Memoized: Prevents re-renders when props haven't changed
+ */
 const SegmentLayer = memo(function SegmentLayer({ segments, onSelect }: SegmentLayerProps) {
   const map = useMap();
 
-  // Filter and optimize segments based on viewport and zoom
+  /**
+   * Filter and optimize segments based on viewport and zoom level.
+   * This is the main performance optimization - dramatically reduces
+   * the number of segments rendered.
+   */
   const visibleSegments = useMemo(() => {
-    // Get current map bounds
+    // Get current map bounds and zoom level
     const bounds = map.getBounds();
     const zoom = map.getZoom();
 
+    // Convert Leaflet bounds to our bounding box format
     const bbox = {
       north: bounds.getNorth(),
       south: bounds.getSouth(),
@@ -114,28 +150,30 @@ const SegmentLayer = memo(function SegmentLayer({ segments, onSelect }: SegmentL
       west: bounds.getWest(),
     };
 
-    // Filter invalid coordinates
+    // Step 1: Filter out segments with invalid coordinates
+    // Prevents rendering errors and improves performance
     const validSegments = segments.filter(
       (segment) =>
         segment.coordinates &&
-        segment.coordinates.length >= 2 &&
+        segment.coordinates.length >= 2 && // Need at least 2 points for a line
         segment.coordinates.every(
           (c) =>
             typeof c.lat === 'number' &&
             typeof c.lng === 'number' &&
             !isNaN(c.lat) &&
             !isNaN(c.lng) &&
-            c.lat >= -90 &&
-            c.lat <= 90 &&
-            c.lng >= -180 &&
-            c.lng <= 180
+            c.lat >= -90 && c.lat <= 90 && // Valid latitude range
+            c.lng >= -180 && c.lng <= 180   // Valid longitude range
         )
     );
 
-    // Apply viewport culling
+    // Step 2: Apply viewport culling
+    // Only include segments that intersect with the visible map area
     const viewportFiltered = filterSegmentsByViewport(validSegments, bbox);
 
-    // Apply zoom-based LOD
+    // Step 3: Apply zoom-based Level of Detail (LOD)
+    // At low zoom: show only major roads
+    // At high zoom: show all roads
     return filterSegmentsByZoom(viewportFiltered, zoom);
   }, [segments, map]);
 

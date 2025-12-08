@@ -110,65 +110,102 @@ export function useDashboardPolling(intervalMs: number = 5000) {
 
 /**
  * Hook to track map bounds changes and trigger data refetch.
- * Now with request cancellation and better throttling.
+ * 
+ * This hook monitors map view changes and automatically fetches traffic data
+ * when the user pans or zooms. It includes several performance optimizations:
+ * 
+ * - Request cancellation: Cancels pending requests when map moves again
+ * - Debouncing: Waits 600ms after movement stops before fetching
+ * - Bounds tracking: Only fetches if bounds changed significantly
+ * - Parallel requests: Fetches traffic flow and incidents simultaneously
+ * 
+ * @example
+ * ```tsx
+ * function MapComponent() {
+ *   useMapBoundsTracker(); // Automatically fetches data on map movement
+ *   return <MapContainer>...</MapContainer>;
+ * }
+ * ```
  */
 export function useMapBoundsTracker() {
   const { mapView, getBoundingBox, setTrafficData, setIsLoading, setIncidents } = useTrafficStore();
+  
+  // Track last bounds to detect changes
   const lastBoundsRef = useRef<string | null>(null);
+  
+  // Store timeout ID for debouncing
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Store abort controller for request cancellation
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    // Cancel any pending requests
+    // Cancel any pending requests from previous map movement
+    // This prevents unnecessary API calls when user moves map rapidly
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
 
-    // Clear any pending timeout
+    // Clear any pending timeout (debounce reset)
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
 
+    // Get current bounding box from map view
     const bbox = getBoundingBox();
+    
+    // Create a unique key for these bounds (rounded to 4 decimal places)
+    // This allows detecting significant changes while ignoring tiny movements
     const boundsKey = `${bbox.north.toFixed(4)},${bbox.south.toFixed(4)},${bbox.east.toFixed(4)},${bbox.west.toFixed(4)}`;
     
-    // Only fetch if bounds changed significantly (more than 5% change)
+    // Only fetch if bounds changed significantly
+    // Prevents redundant API calls for tiny map movements
     if (boundsKey !== lastBoundsRef.current) {
       lastBoundsRef.current = boundsKey;
       
-      // Debounced fetch when bounds change (throttled to prevent rapid requests)
+      // Debounced fetch: wait 600ms after movement stops before fetching
+      // This prevents excessive API calls during rapid panning/zooming
       timeoutRef.current = setTimeout(async () => {
         // Create new abort controller for this request
+        // Allows cancelling if user moves map again before request completes
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
 
         setIsLoading(true);
         try {
+          // Fetch traffic flow and incidents in parallel
+          // Both requests use the same abort signal so both can be cancelled together
           const [flowData, incidentsData] = await Promise.all([
             trafficApi.getFlow(bbox, abortController.signal),
-            trafficApi.getIncidents(bbox, abortController.signal).catch(() => []), // Don't fail if incidents fail
+            // Incidents fetch won't fail entire operation if it errors
+            trafficApi.getIncidents(bbox, abortController.signal).catch(() => []),
           ]);
 
-          // Check if request was cancelled
+          // Check if request was cancelled (user moved map again)
+          // If cancelled, don't update state with stale data
           if (abortController.signal.aborted) {
             return;
           }
           
+          // Update store with fresh data
           setTrafficData(flowData);
           setIncidents(incidentsData);
         } catch (err) {
-          // Don't log if it was just a cancellation
+          // Don't log cancellation errors (expected behavior)
+          // Only log actual API errors
           if (err instanceof Error && err.name !== 'AbortError') {
             console.error('Failed to fetch traffic for new bounds:', err);
           }
         } finally {
+          // Only update loading state if request wasn't cancelled
           if (!abortController.signal.aborted) {
             setIsLoading(false);
           }
         }
-      }, 600); // Optimized debounce: 600ms
+      }, 600); // 600ms debounce delay - optimized for smooth UX
     }
 
+    // Cleanup: cancel timeout and abort requests on unmount or dependency change
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);

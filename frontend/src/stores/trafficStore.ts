@@ -1,8 +1,25 @@
 /**
  * Traffic Store - Zustand state management
  * 
- * Manages all traffic data, simulation state, and UI state
- * in a centralized, reactive store.
+ * Centralized state management for the entire traffic simulation application.
+ * Uses Zustand for lightweight, performant state management with:
+ * - Reactive updates (components re-render when data changes)
+ * - Selector optimization (components only subscribe to needed data)
+ * - Middleware support (subscribeWithSelector for advanced patterns)
+ * 
+ * Store manages:
+ * - Map view state (center, zoom, bounds)
+ * - Traffic data (segments, incidents, flow data)
+ * - Simulation state (vehicles, lights, metrics)
+ * - Dashboard data (metrics, charts, analytics)
+ * - UI state (selected features, active tab, loading states)
+ * 
+ * @example
+ * ```tsx
+ * // In component
+ * const trafficData = useTrafficStore((s) => s.trafficData);
+ * const setTrafficData = useTrafficStore((s) => s.setTrafficData);
+ * ```
  */
 
 import { create } from 'zustand';
@@ -70,9 +87,23 @@ interface TrafficStore {
   error: string | null;
   setError: (error: string | null) => void;
   
-  // Computed / derived values
-  getBoundingBox: () => BoundingBox;
-  getSegmentById: (id: string) => RoadSegment | undefined;
+    // Computed / derived values
+    /**
+     * Calculate bounding box from current map view.
+     * Used for API requests to fetch data for visible area.
+     * 
+     * @returns BoundingBox representing the visible map area
+     */
+    getBoundingBox: () => BoundingBox;
+    
+    /**
+     * Find a road segment by its ID.
+     * Useful for looking up segment details when user clicks on map.
+     * 
+     * @param id - Segment ID to search for
+     * @returns RoadSegment if found, undefined otherwise
+     */
+    getSegmentById: (id: string) => RoadSegment | undefined;
 }
 
 // ============================================================
@@ -154,8 +185,20 @@ export const useTrafficStore = create<TrafficStore>()(
     setError: (error) => set({ error }),
     
     // Computed values
+    /**
+     * Calculate bounding box from current map view.
+     * 
+     * The bounding box size is inversely proportional to zoom level:
+     * - Low zoom (zoomed out) = larger bounding box
+     * - High zoom (zoomed in) = smaller bounding box
+     * 
+     * This ensures we fetch appropriate amount of data for the view.
+     */
     getBoundingBox: () => {
       const { mapView } = get();
+      // Calculate offset based on zoom level
+      // At zoom 10, offset is ~0.02 degrees (~2km)
+      // Offset decreases as zoom increases (more detail = smaller area)
       const offset = 0.02 / (mapView.zoom / 10);
       return {
         north: mapView.center.lat + offset,

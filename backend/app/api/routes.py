@@ -1,6 +1,18 @@
 """
 FastAPI route definitions.
-All API endpoints for traffic data, simulation control, and dashboard metrics.
+
+This module defines all REST API endpoints and WebSocket connections for:
+- Traffic data fetching (real-time from TomTom API)
+- Simulation control (start, stop, configure)
+- Dashboard metrics and analytics
+
+API Structure:
+- /traffic/* - Real-time traffic data endpoints
+- /simulation/* - Simulation control and state management
+- /dashboard/* - Analytics and metrics endpoints
+- /simulation/ws - WebSocket for real-time simulation updates
+
+All endpoints use Pydantic models for request/response validation.
 """
 
 from datetime import datetime
@@ -27,7 +39,7 @@ from ..services.tomtom import get_tomtom_service
 from ..simulation.engine import get_simulation_engine
 
 
-# Create routers
+# Create API routers with prefixes and tags for OpenAPI documentation
 traffic_router = APIRouter(prefix="/traffic", tags=["Traffic Data"])
 simulation_router = APIRouter(prefix="/simulation", tags=["Simulation"])
 dashboard_router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -93,21 +105,49 @@ async def get_traffic_flow(
     """
     Get real-time traffic flow data for a bounding box.
     
-    Returns congestion levels, speeds, and travel times for all
-    road segments within the specified area.
+    This endpoint fetches traffic data from TomTom API for all road segments
+    within the specified geographic bounding box. The data includes:
+    - Current speeds and free-flow speeds
+    - Travel times and delays
+    - Congestion levels (free_flow, light, moderate, heavy, severe)
+    - Road segment metadata
+    
+    The endpoint also automatically updates the simulation engine with the
+    fetched data, allowing the simulation to reflect real-world conditions.
+    
+    Args:
+        north: Northern boundary latitude
+        south: Southern boundary latitude
+        east: Eastern boundary longitude
+        west: Western boundary longitude
+    
+    Returns:
+        TrafficFlowData containing:
+        - List of road segments with traffic metrics
+        - Aggregate statistics (average speed ratio, congestion counts)
+        - Bounding box and timestamp
+    
+    Raises:
+        HTTPException: If API request fails or returns invalid data
+    
+    Example:
+        GET /traffic/flow?north=40.8&south=40.7&east=-74.0&west=-74.1
     """
     tomtom = get_tomtom_service()
     bbox = BoundingBox(north=north, south=south, east=east, west=west)
     
     try:
+        # Fetch traffic data from TomTom API (parallel requests for performance)
         data = await tomtom.get_traffic_flow_tiles(bbox)
         
-        # Also update simulation with real data
+        # Update simulation engine with real-world data
+        # This allows simulation to adjust spawn rates and speeds based on actual congestion
         engine = get_simulation_engine()
         engine.update_real_traffic_data(data)
         
         return data
     except Exception as e:
+        # Return 500 error with details for debugging
         raise HTTPException(status_code=500, detail=f"Failed to fetch traffic data: {str(e)}")
 
 

@@ -34,35 +34,77 @@ class SimulationEngine:
     """
     Real-time traffic simulation engine.
     
-    Integrates with actual traffic data to create a hybrid simulation
-    that respects real-world congestion while simulating individual
-    vehicle behavior.
+    This engine simulates vehicle movement, traffic light behavior, and congestion
+    in real-time. It integrates with actual traffic data from TomTom API to create
+    a hybrid simulation that respects real-world conditions while simulating
+    individual vehicle behaviors.
+    
+    Key Features:
+    - Vehicle spawning and movement with physics-based acceleration/deceleration
+    - Driver behavior profiles (aggressive, normal, cautious, learner)
+    - Traffic light control with adjustable timing
+    - Incident management (accidents, closures, slowdowns)
+    - Emissions calculations based on traffic state
+    - Real-time metrics (wait times, flow rates, speeds)
+    
+    Attributes:
+        config: Simulation configuration (tick rate, max vehicles, etc.)
+        state: Current simulation state (vehicles, lights, metrics)
+        _running: Whether simulation loop is currently running
+        _real_traffic_data: Latest real-world traffic data from API
+        _listeners: Callbacks to notify when simulation state changes
     """
     
     def __init__(self, config: Optional[SimulationConfig] = None):
+        """
+        Initialize simulation engine.
+        
+        Args:
+            config: Optional simulation configuration. If None, uses defaults.
+        """
         self.config = config or SimulationConfig()
         self.state = SimulationState(timestamp=datetime.utcnow())
-        self._running = False
-        self._real_traffic_data: Optional[TrafficFlowData] = None
-        self._listeners: list[Callable[[SimulationState], None]] = []
+        self._running = False  # Simulation loop not running initially
+        self._real_traffic_data: Optional[TrafficFlowData] = None  # Real traffic data
+        self._listeners: list[Callable[[SimulationState], None]] = []  # State change listeners
     
     # ============================================================
     # LIFECYCLE METHODS
     # ============================================================
     
     async def start(self):
-        """Start the simulation loop."""
+        """
+        Start the simulation loop.
+        
+        Begins continuous simulation ticks at the configured interval.
+        Runs until stop() is called. Each tick updates all vehicles,
+        traffic lights, and calculates metrics.
+        
+        Note: This is an async function that runs indefinitely.
+        Use stop() to terminate the loop.
+        """
         self._running = True
         while self._running:
-            await self.tick()
+            await self.tick()  # Execute one simulation step
+            # Wait for configured tick interval before next tick
             await asyncio.sleep(self.config.tick_interval_ms / 1000)
     
     def stop(self):
-        """Stop the simulation loop."""
+        """
+        Stop the simulation loop.
+        
+        Sets running flag to False, which will cause the start() loop
+        to exit on the next iteration. Simulation state is preserved.
+        """
         self._running = False
     
     def reset(self):
-        """Reset simulation to initial state."""
+        """
+        Reset simulation to initial state.
+        
+        Clears all vehicles, resets metrics, but preserves configuration.
+        Useful for restarting simulation from scratch.
+        """
         self.state = SimulationState(timestamp=datetime.utcnow())
     
     def add_listener(self, callback: Callable[[SimulationState], None]):

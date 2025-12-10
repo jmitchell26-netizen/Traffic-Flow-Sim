@@ -35,6 +35,8 @@ import {
 } from 'recharts';
 import { useTrafficStore } from '../../stores/trafficStore';
 import { CONGESTION_COLORS, formatSpeed, formatDuration } from '../../types/traffic';
+import { ExportButton } from './ExportButton';
+import { HistoryPanel } from './HistoryPanel';
 
 // ============================================================
 // METRIC CARD COMPONENT
@@ -314,8 +316,10 @@ function EmissionsPanel() {
 export function Dashboard() {
   const dashboardData = useTrafficStore((s) => s.dashboardData);
   const simulationState = useTrafficStore((s) => s.simulationState);
+  const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
 
   const metrics = dashboardData?.current_metrics;
+  const bbox = getBoundingBox();
 
   return (
     <div className="h-full overflow-auto p-6 bg-dash-bg">
@@ -330,9 +334,12 @@ export function Dashboard() {
               Real-time metrics and simulation data
             </p>
           </div>
-          <div className="flex items-center gap-2 text-sm text-dash-muted">
-            <Clock className="w-4 h-4" />
-            Last updated: {new Date().toLocaleTimeString()}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm text-dash-muted">
+              <Clock className="w-4 h-4" />
+              Last updated: {new Date().toLocaleTimeString()}
+            </div>
+            <ExportButton />
           </div>
         </div>
 
@@ -419,6 +426,9 @@ export function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* Historical Trends */}
+        <HistoryPanel bbox={bbox} />
       </div>
     </div>
   );

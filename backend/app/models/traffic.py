@@ -85,6 +85,50 @@ class TrafficFlowData(BaseModel):
     congested_segments: int = 0
 
 
+class TrafficAlert(BaseModel):
+    """User-defined traffic alert."""
+    id: str
+    name: str
+    area: BoundingBox
+    conditions: dict  # e.g., {"congestion_level": "heavy", "delay_threshold": 300}
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    def check_conditions(self, traffic_data: TrafficFlowData) -> bool:
+        """Check if alert conditions are met."""
+        if not self.enabled:
+            return False
+        
+        # Check congestion level
+        if "congestion_level" in self.conditions:
+            required_level = self.conditions["congestion_level"]
+            congested_count = sum(
+                1 for s in traffic_data.segments
+                if s.congestion_level == required_level
+            )
+            threshold = self.conditions.get("congestion_count", 1)
+            if congested_count >= threshold:
+                return True
+        
+        # Check delay threshold
+        if "delay_threshold" in self.conditions:
+            threshold = self.conditions["delay_threshold"]
+            high_delay_count = sum(
+                1 for s in traffic_data.segments
+                if s.delay_seconds >= threshold
+            )
+            if high_delay_count > 0:
+                return True
+        
+        # Check average speed ratio
+        if "speed_ratio_threshold" in self.conditions:
+            threshold = self.conditions["speed_ratio_threshold"]
+            if traffic_data.average_speed_ratio <= threshold:
+                return True
+        
+        return False
+
+
 class TrafficIncident(BaseModel):
     """Traffic incident (accident, road closure, etc.)."""
     id: str

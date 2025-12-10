@@ -110,12 +110,13 @@ interface TrafficStore {
 // DEFAULT VALUES
 // ============================================================
 
+// Default to world view - allows navigation anywhere
 const DEFAULT_CENTER: Coordinates = {
-  lat: 40.7128,
-  lng: -74.0060, // New York City
+  lat: 20.0,  // Center of world map
+  lng: 0.0,   // Prime meridian
 };
 
-const DEFAULT_ZOOM = 13;
+const DEFAULT_ZOOM = 3; // World view (low zoom = see whole world)
 
 const DEFAULT_MAP_VIEW: MapViewState = {
   center: DEFAULT_CENTER,
@@ -188,23 +189,36 @@ export const useTrafficStore = create<TrafficStore>()(
     /**
      * Calculate bounding box from current map view.
      * 
-     * The bounding box size is inversely proportional to zoom level:
-     * - Low zoom (zoomed out) = larger bounding box
-     * - High zoom (zoomed in) = smaller bounding box
-     * 
-     * This ensures we fetch appropriate amount of data for the view.
+     * Uses actual map bounds for accurate coverage.
+     * This ensures we fetch data for the entire visible area, not just a small region.
      */
     getBoundingBox: () => {
       const { mapView } = get();
-      // Calculate offset based on zoom level
-      // At zoom 10, offset is ~0.02 degrees (~2km)
-      // Offset decreases as zoom increases (more detail = smaller area)
-      const offset = 0.02 / (mapView.zoom / 10);
+      
+      // If we have bounds from map, use them (most accurate)
+      if (mapView.bounds) {
+        return mapView.bounds;
+      }
+      
+      // Fallback: Calculate from center and zoom
+      // Use larger offset to cover more area
+      // At zoom 3 (world): ~45 degrees (covers most of world)
+      // At zoom 10: ~0.5 degrees (~50km)
+      // At zoom 15: ~0.01 degrees (~1km)
+      const baseOffset = 45; // Base offset for world view
+      const zoomFactor = Math.pow(2, 15 - mapView.zoom); // Exponential scaling
+      const offset = baseOffset / zoomFactor;
+      
+      // Clamp to reasonable bounds (don't exceed world limits)
+      const maxOffset = 45; // Max ~5000km
+      const minOffset = 0.01; // Min ~1km
+      const clampedOffset = Math.max(minOffset, Math.min(maxOffset, offset));
+      
       return {
-        north: mapView.center.lat + offset,
-        south: mapView.center.lat - offset,
-        east: mapView.center.lng + offset,
-        west: mapView.center.lng - offset,
+        north: Math.min(90, mapView.center.lat + clampedOffset),
+        south: Math.max(-90, mapView.center.lat - clampedOffset),
+        east: Math.min(180, mapView.center.lng + clampedOffset),
+        west: Math.max(-180, mapView.center.lng - clampedOffset),
       };
     },
     

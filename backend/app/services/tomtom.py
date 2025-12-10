@@ -157,7 +157,7 @@ class TomTomService:
         self,
         bbox: BoundingBox,
         style: str = "relative0",
-        grid_size: int = 8
+        grid_size: Optional[int] = None
     ) -> TrafficFlowData:
         """
         Get traffic flow data for a bounding box region.
@@ -191,14 +191,41 @@ class TomTomService:
         """
         import asyncio
         
+        # Calculate area in square degrees (approximate)
+        # This is needed for both grid size calculation and secondary grid logic
+        area = (bbox.north - bbox.south) * (bbox.east - bbox.west)
+        
+        # Calculate adaptive grid size based on bounding box area
+        # Larger areas need more samples for good coverage
+        # Smaller areas need fewer samples (performance)
+        if grid_size is None:
+            # Adaptive grid sizing with increased density for better road coverage:
+            # More sample points = better chance of hitting all roads
+            # - Very large areas (>1000 sq degrees): 12x12 = 144 points
+            # - Large areas (100-1000): 12x12 = 144 points  
+            # - Medium areas (10-100): 10x10 = 100 points
+            # - Small areas (<10): 8x8 = 64 points
+            # Increased grid density ensures we don't miss roads between sample points
+            if area > 1000:
+                grid_size = 12  # More points for better coverage
+            elif area > 100:
+                grid_size = 12  # More points for better coverage
+            elif area > 10:
+                grid_size = 10  # Increased from 8
+            else:
+                grid_size = 8   # Increased from 6
+        
         # Calculate step size for grid sampling
         # Divides the bounding box into a grid of sample points
         lat_step = (bbox.north - bbox.south) / grid_size
         lng_step = (bbox.east - bbox.west) / grid_size
         
-        # Generate grid of sample points
-        # Each point is at the center of its grid cell
+        # Generate grid of sample points with overlapping coverage
+        # Use multiple offset grids to ensure we catch roads that might be missed
+        # This is called "staggered sampling" - improves coverage without massive API calls
         points = []
+        
+        # Primary grid: sample at cell centers
         for i in range(grid_size):
             for j in range(grid_size):
                 point = Coordinates(
@@ -207,16 +234,36 @@ class TomTomService:
                 )
                 points.append(point)
         
+        # Secondary grid: offset by 1/3 to catch roads missed by primary grid
+        # Only add if area is small enough (to avoid too many API calls)
+        if area < 100:  # Only for smaller areas to avoid excessive API calls
+            for i in range(grid_size):
+                for j in range(grid_size):
+                    # Offset by 1/3 in both directions
+                    offset_lat = bbox.south + lat_step * (i + 1/3)
+                    offset_lng = bbox.west + lng_step * (j + 1/3)
+                    # Only add if within bounds
+                    if (bbox.south <= offset_lat <= bbox.north and 
+                        bbox.west <= offset_lng <= bbox.east):
+                        point = Coordinates(lat=offset_lat, lng=offset_lng)
+                        points.append(point)
+        
         # Fetch all segments in parallel with concurrency limiting
-        # Semaphore limits to 10 concurrent requests to avoid API rate limits
-        semaphore = asyncio.Semaphore(10)
+        # Increased concurrency limit to 15 (from 10) for faster data fetching
+        # TomTom API can handle this, and it improves coverage speed
+        semaphore = asyncio.Semaphore(15)
         
         async def fetch_with_limit(point: Coordinates):
             """
             Wrapper function that respects concurrency limit.
             Only 10 requests will run simultaneously.
+            
+            Uses zoom level 12 for detailed road segments.
+            Higher zoom = more detailed segments, better road coverage.
             """
             async with semaphore:
+                # Use zoom 12 for detailed segments (was 12, keeping it)
+                # Zoom 12 gives good detail without being too granular
                 return await self.get_flow_segment_data(point, zoom=12)
         
         # Execute all requests in parallel
@@ -239,6 +286,10 @@ class TomTomService:
                 if result.coordinates and len(result.coordinates) >= 2:
                     seen_ids.add(result.id)
                     segments.append(result)
+            
+            # Also check if result is None due to no road at that point
+            # This is normal - not every point will have a road nearby
+            # The grid sampling approach means we'll still get good coverage
         
         # Calculate aggregate metrics for the region
         if segments:
@@ -348,6 +399,113 @@ class TomTomService:
         raw = f"{point.lat:.5f},{point.lng:.5f},{zoom}"
         return hashlib.md5(raw.encode()).hexdigest()[:12]
     
+    # ============================================================
+    # SEARCH API
+    # ============================================================
+    
+    async def search_location(self, query: str, limit: int = 10) -> list[dict]:
+        """
+        Search for locations using TomTom Search API.
+        
+        This method searches for places, addresses, and points of interest
+        using TomTom's Search API. Falls back to OpenStreetMap Nominatim
+        if TomTom API fails.
+        
+        Args:
+            query: Search query (e.g., "New York", "Times Square", "Paris")
+            limit: Maximum number of results to return (default 10)
+        
+        Returns:
+            List of location results with:
+            - name: Display name
+            - coordinates: {lat, lng}
+            - bounds: Bounding box
+            - type: Location type (city, address, poi, etc.)
+            - address: Full address string
+        """
+        client = await self.get_client()
+        
+        try:
+            # Try TomTom Search API first
+            url = f"{self.BASE_URL}/search/2/search/{query}.json"
+            params = {
+                "key": self.api_key,
+                "limit": limit,
+                "typeahead": "true",
+                "language": "en-US",
+            }
+            
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            for result in data.get("results", [])[:limit]:
+                position = result.get("position", {})
+                viewport = result.get("viewport", {})
+                
+                results.append({
+                    "name": result.get("poi", {}).get("name") or result.get("address", {}).get("freeformAddress") or result.get("address", {}).get("municipality") or query,
+                    "coordinates": {
+                        "lat": position.get("lat"),
+                        "lng": position.get("lon"),
+                    },
+                    "bounds": {
+                        "north": viewport.get("topLeftPoint", {}).get("lat") or position.get("lat") + 0.01,
+                        "south": viewport.get("bottomRightPoint", {}).get("lat") or position.get("lat") - 0.01,
+                        "east": viewport.get("bottomRightPoint", {}).get("lon") or position.get("lon") + 0.01,
+                        "west": viewport.get("topLeftPoint", {}).get("lon") or position.get("lon") - 0.01,
+                    },
+                    "type": result.get("type", "unknown"),
+                    "address": result.get("address", {}).get("freeformAddress", ""),
+                })
+            
+            return results
+            
+        except Exception as e:
+            # Fallback to OpenStreetMap Nominatim (free, no API key needed)
+            print(f"TomTom search failed, trying OpenStreetMap: {e}")
+            try:
+                nominatim_url = "https://nominatim.openstreetmap.org/search"
+                params = {
+                    "q": query,
+                    "format": "json",
+                    "limit": limit,
+                    "addressdetails": "1",
+                }
+                headers = {
+                    "User-Agent": "TrafficFlowSim/1.0"  # Required by Nominatim
+                }
+                
+                response = await client.get(nominatim_url, params=params, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                results = []
+                for result in data[:limit]:
+                    bounds = result.get("boundingbox", [])
+                    results.append({
+                        "name": result.get("display_name", "").split(",")[0] or query,
+                        "coordinates": {
+                            "lat": float(result.get("lat", 0)),
+                            "lng": float(result.get("lon", 0)),
+                        },
+                        "bounds": {
+                            "north": float(bounds[1]) if len(bounds) > 1 else float(result.get("lat", 0)) + 0.01,
+                            "south": float(bounds[0]) if len(bounds) > 0 else float(result.get("lat", 0)) - 0.01,
+                            "east": float(bounds[3]) if len(bounds) > 3 else float(result.get("lon", 0)) + 0.01,
+                            "west": float(bounds[2]) if len(bounds) > 2 else float(result.get("lon", 0)) - 0.01,
+                        },
+                        "type": result.get("type", "unknown"),
+                        "address": result.get("display_name", ""),
+                    })
+                
+                return results
+                
+            except Exception as fallback_error:
+                print(f"OpenStreetMap search also failed: {fallback_error}")
+                return []
+    
     def _map_incident_type(self, icon_category: int) -> str:
         """Map TomTom icon category to incident type."""
         mapping = {
@@ -366,6 +524,84 @@ class TomTomService:
             14: "broken_down_vehicle",
         }
         return mapping.get(icon_category, "unknown")
+    
+    # ============================================================
+    # ROUTING API
+    # ============================================================
+    
+    async def calculate_route(
+        self,
+        start: Coordinates,
+        end: Coordinates,
+        alternatives: bool = False
+    ) -> list[dict]:
+        """
+        Calculate route between two points using TomTom Routing API.
+        
+        Args:
+            start: Starting coordinates
+            end: Destination coordinates
+            alternatives: Whether to return alternative routes
+        
+        Returns:
+            List of route dictionaries with geometry, distance, time, and delays
+        """
+        client = await self.get_client()
+        
+        try:
+            url = f"{self.BASE_URL}/routing/1/calculateRoute/{start.lat},{start.lng}:{end.lat},{end.lng}/json"
+            params = {
+                "key": self.api_key,
+                "routeType": "fastest",  # Options: fastest, shortest, eco, thrilling
+                "traffic": "true",  # Include traffic data
+                "avoid": "",  # Can add: tollRoads, motorways, etc.
+                "travelMode": "car",  # Options: car, pedestrian, taxi, bus, van, motorcycle, truck, bicycle
+                "maxAlternatives": 3 if alternatives else 0,
+            }
+            
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            routes = []
+            for route_data in data.get("routes", []):
+                summary = route_data.get("summary", {})
+                legs = route_data.get("legs", [])
+                
+                # Extract geometry (coordinates)
+                geometry = []
+                for leg in legs:
+                    for point in leg.get("points", []):
+                        geometry.append({
+                            "lat": point.get("latitude"),
+                            "lng": point.get("longitude"),
+                        })
+                
+                routes.append({
+                    "distance": summary.get("lengthInMeters", 0) / 1000,  # Convert to km
+                    "time": summary.get("travelTimeInSeconds", 0),  # seconds
+                    "delay": summary.get("delayInSeconds", 0),  # seconds
+                    "geometry": geometry,
+                    "instructions": self._extract_instructions(route_data),
+                })
+            
+            return routes
+            
+        except Exception as e:
+            print(f"Error calculating route: {e}")
+            return []
+    
+    def _extract_instructions(self, route_data: dict) -> list[dict]:
+        """Extract turn-by-turn instructions from route data."""
+        instructions = []
+        for leg in route_data.get("legs", []):
+            for guidance in leg.get("guidance", {}).get("instructions", []):
+                instructions.append({
+                    "instruction": guidance.get("instruction", ""),
+                    "distance": guidance.get("distance", 0),
+                    "road": guidance.get("road", ""),
+                })
+        return instructions
 
 
 # Singleton instance

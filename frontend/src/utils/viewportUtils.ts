@@ -77,10 +77,15 @@ export function expandBounds(bounds: BoundingBox, paddingPercent: number = 0.1):
 /**
  * Get zoom-based detail level
  * Higher zoom = more detail
+ * 
+ * Updated thresholds to show more detail at lower zoom levels:
+ * - Low: zoom < 8 (was 10) - shows major roads and heavy congestion
+ * - Medium: zoom < 12 (was 13) - shows moderate+ congestion
+ * - High: zoom >= 12 - shows all roads
  */
 export function getDetailLevel(zoom: number): 'low' | 'medium' | 'high' {
-  if (zoom < 10) return 'low';
-  if (zoom < 13) return 'medium';
+  if (zoom < 8) return 'low';   // Lowered from 10 to show more at medium zoom
+  if (zoom < 12) return 'medium'; // Lowered from 13
   return 'high';
 }
 

@@ -46,6 +46,26 @@ export interface BoundingBox {
   west: number;
 }
 
+export interface LocationResult {
+  name: string;
+  coordinates: Coordinates;
+  bounds: BoundingBox;
+  type: string;
+  address: string;
+}
+
+export interface Route {
+  distance: number;  // km
+  time: number;  // seconds
+  delay: number;  // seconds
+  geometry: Coordinates[];
+  instructions?: Array<{
+    instruction: string;
+    distance: number;
+    road: string;
+  }>;
+}
+
 // ============================================================
 // TRAFFIC DATA TYPES
 // ============================================================

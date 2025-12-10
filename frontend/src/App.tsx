@@ -15,6 +15,8 @@ import { TrafficMap } from './components/map/TrafficMap';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { SimulationPanel } from './components/simulation/SimulationPanel';
 import { GameMode } from './components/game/GameMode';
+import { AlertManager } from './components/alerts/AlertManager';
+import { useAlerts } from './hooks/useAlerts';
 import { trafficApi, dashboardApi } from './services/api';
 
 function App() {
@@ -30,7 +32,7 @@ function App() {
     getBoundingBox,
   } = useTrafficStore();
 
-  // Initial data fetch
+  // Initial data fetch - fetch for current view
   useEffect(() => {
     const fetchInitialData = async () => {
       setIsLoading(true);
@@ -122,6 +124,7 @@ function App() {
 
           {/* Status Indicator */}
           <div className="flex items-center gap-4">
+            <AlertManager />
             {isLoading && (
               <div className="flex items-center gap-2 text-dash-muted text-sm">
                 <div className="w-2 h-2 rounded-full bg-dash-accent animate-pulse" />

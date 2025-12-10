@@ -154,24 +154,37 @@ export function useMapBoundsTracker() {
     // Get current bounding box from map view
     const bbox = getBoundingBox();
     
-    // Create a unique key for these bounds (rounded to 4 decimal places)
+    // Create a unique key for these bounds (rounded to 2 decimal places for larger tolerance)
     // This allows detecting significant changes while ignoring tiny movements
-    const boundsKey = `${bbox.north.toFixed(4)},${bbox.south.toFixed(4)},${bbox.east.toFixed(4)},${bbox.west.toFixed(4)}`;
+    // Using 2 decimal places (~1km tolerance) instead of 4 (~100m) reduces unnecessary fetches
+    const boundsKey = `${bbox.north.toFixed(2)},${bbox.south.toFixed(2)},${bbox.east.toFixed(2)},${bbox.west.toFixed(2)}`;
     
     // Only fetch if bounds changed significantly
     // Prevents redundant API calls for tiny map movements
     if (boundsKey !== lastBoundsRef.current) {
       lastBoundsRef.current = boundsKey;
       
-      // Debounced fetch: wait 600ms after movement stops before fetching
-      // This prevents excessive API calls during rapid panning/zooming
+      // Debounced fetch: wait 1200ms (1.2s) after movement stops before fetching
+      // Longer delay = fewer API calls = smoother experience
+      // Only show loading if we're actually going to fetch
       timeoutRef.current = setTimeout(async () => {
         // Create new abort controller for this request
         // Allows cancelling if user moves map again before request completes
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
 
-        setIsLoading(true);
+        // Get current zoom from store (may have changed during debounce delay)
+        const currentMapView = useTrafficStore.getState().mapView;
+        
+        // At very low zoom levels (world view), use fewer sample points to avoid massive API calls
+        // But still fetch data - we'll filter segments by zoom level for display
+        
+        // Only set loading state if request wasn't immediately cancelled
+        // This prevents flickering loading screens
+        if (!abortController.signal.aborted) {
+          setIsLoading(true);
+        }
+        
         try {
           // Fetch traffic flow and incidents in parallel
           // Both requests use the same abort signal so both can be cancelled together
@@ -202,7 +215,7 @@ export function useMapBoundsTracker() {
             setIsLoading(false);
           }
         }
-      }, 600); // 600ms debounce delay - optimized for smooth UX
+      }, 1200); // 1200ms (1.2s) debounce delay - reduces API calls, smoother UX
     }
 
     // Cleanup: cancel timeout and abort requests on unmount or dependency change

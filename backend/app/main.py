@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import traffic_router, simulation_router, dashboard_router
+from .api.routes import traffic_router, simulation_router, dashboard_router, alert_router
 from .core.config import get_settings
 from .services.tomtom import get_tomtom_service
 
@@ -129,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(traffic_router)      # Traffic data endpoints
     app.include_router(simulation_router)   # Simulation control endpoints
     app.include_router(dashboard_router)    # Dashboard/metrics endpoints
+    app.include_router(alert_router)        # Alert management endpoints
     
     @app.get("/")
     async def root():

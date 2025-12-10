@@ -9,9 +9,12 @@ import type {
   CongestionSummary,
   DashboardData,
   IntersectionMetrics,
+  LocationResult,
   RoadSegment,
+  Route,
   SimulationConfig,
   SimulationState,
+  TrafficAlert,
   TrafficFlowData,
   TrafficIncident,
   TrafficMetrics,
@@ -135,6 +138,48 @@ export const trafficApi = {
     });
     return fetchApi<CongestionSummary>(`/traffic/congestion?${params}`);
   },
+  
+  /**
+   * Search for locations by name or address
+   */
+  async searchLocation(query: string, limit: number = 10) {
+    return fetchApi<{ results: LocationResult[]; query: string }>(
+      `/traffic/search?q=${encodeURIComponent(query)}&limit=${limit}`
+    );
+  },
+  
+  /**
+   * Calculate route between two points
+   */
+  async calculateRoute(
+    start: { lat: number; lng: number },
+    end: { lat: number; lng: number },
+    alternatives: boolean = false
+  ) {
+    const params = new URLSearchParams({
+      start_lat: start.lat.toString(),
+      start_lng: start.lng.toString(),
+      end_lat: end.lat.toString(),
+      end_lng: end.lng.toString(),
+      alternatives: alternatives.toString(),
+    });
+    return fetchApi<{ routes: Route[] }>(`/traffic/route?${params}`);
+  },
+  
+  /**
+   * Check alerts for current traffic data
+   */
+  async checkAlerts(bbox: BoundingBox) {
+    const params = new URLSearchParams({
+      north: bbox.north.toString(),
+      south: bbox.south.toString(),
+      east: bbox.east.toString(),
+      west: bbox.west.toString(),
+    });
+    return fetchApi<Array<{ alert_id: string; alert_name: string; triggered_at: string }>>(
+      `/traffic/check-alerts?${params}`
+    );
+  },
 };
 
 // ============================================================
@@ -166,8 +211,18 @@ export const simulationApi = {
   /**
    * Reset the simulation
    */
-  async reset(): Promise<{ status: string; state: SimulationState }> {
+  async reset(): Promise<{ status: string }> {
     return fetchApi('/simulation/reset', { method: 'POST' });
+  },
+  
+  /**
+   * Update simulation configuration
+   */
+  async updateConfig(config: Partial<SimulationConfig>): Promise<SimulationConfig> {
+    return fetchApi<SimulationConfig>('/simulation/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
   },
   
   /**
@@ -175,71 +230,6 @@ export const simulationApi = {
    */
   async getConfig(): Promise<SimulationConfig> {
     return fetchApi<SimulationConfig>('/simulation/config');
-  },
-  
-  /**
-   * Update simulation configuration
-   */
-  async updateConfig(config: Partial<SimulationConfig>): Promise<{ status: string }> {
-    return fetchApi('/simulation/config', {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    });
-  },
-  
-  /**
-   * Add an intersection
-   */
-  async addIntersection(data: {
-    lat: number;
-    lng: number;
-    name?: string;
-    green_duration?: number;
-    yellow_duration?: number;
-    red_duration?: number;
-  }): Promise<{ status: string; intersection: unknown }> {
-    return fetchApi('/simulation/intersection', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-  
-  /**
-   * Adjust traffic light timing
-   */
-  async adjustTrafficLight(data: {
-    light_id: string;
-    green_duration?: number;
-    yellow_duration?: number;
-    red_duration?: number;
-  }): Promise<{ status: string }> {
-    return fetchApi('/simulation/traffic-light', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-  
-  /**
-   * Add a traffic incident
-   */
-  async addIncident(data: {
-    type: string;
-    lat: number;
-    lng: number;
-    description?: string;
-    severity?: number;
-  }): Promise<{ status: string; incident: TrafficIncident }> {
-    return fetchApi('/simulation/incident', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-  
-  /**
-   * Remove a traffic incident
-   */
-  async removeIncident(id: string): Promise<{ status: string }> {
-    return fetchApi(`/simulation/incident/${id}`, { method: 'DELETE' });
   },
 };
 
@@ -249,29 +239,76 @@ export const simulationApi = {
 
 export const dashboardApi = {
   /**
-   * Get current traffic metrics
-   */
-  async getMetrics(): Promise<TrafficMetrics> {
-    return fetchApi<TrafficMetrics>('/dashboard/metrics');
-  },
-  
-  /**
-   * Get complete dashboard data
+   * Get dashboard data and metrics
    */
   async getData(): Promise<DashboardData> {
     return fetchApi<DashboardData>('/dashboard/data');
   },
   
   /**
-   * Get metrics for a specific intersection
+   * Get intersection metrics
    */
-  async getIntersectionMetrics(id: string): Promise<IntersectionMetrics> {
-    return fetchApi<IntersectionMetrics>(`/dashboard/intersection/${id}`);
+  async getIntersectionMetrics(intersectionId: string): Promise<IntersectionMetrics> {
+    return fetchApi<IntersectionMetrics>(`/dashboard/intersections/${intersectionId}`);
   },
 };
 
 // ============================================================
-// WEBSOCKET CLIENT
+// ALERTS API
+// ============================================================
+
+export const alertsApi = {
+  /**
+   * Get all alerts
+   */
+  async getAlerts(): Promise<TrafficAlert[]> {
+    return fetchApi<TrafficAlert[]>('/alerts');
+  },
+  
+  /**
+   * Create a new alert
+   */
+  async createAlert(alert: {
+    name: string;
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+    conditions: Record<string, any>;
+  }): Promise<TrafficAlert> {
+    return fetchApi<TrafficAlert>('/alerts', {
+      method: 'POST',
+      body: JSON.stringify(alert),
+    });
+  },
+  
+  /**
+   * Update an alert
+   */
+  async updateAlert(alertId: string, updates: Partial<TrafficAlert>): Promise<TrafficAlert> {
+    return fetchApi<TrafficAlert>(`/alerts/${alertId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  },
+  
+  /**
+   * Delete an alert
+   */
+  async deleteAlert(alertId: string): Promise<void> {
+    return fetchApi(`/alerts/${alertId}`, { method: 'DELETE' });
+  },
+  
+  /**
+   * Get alert trigger history
+   */
+  async getAlertHistory(alertId: string): Promise<Array<{ triggered_at: string; conditions_met: any }>> {
+    return fetchApi(`/alerts/${alertId}/history`);
+  },
+};
+
+// ============================================================
+// WEBSOCKET
 // ============================================================
 
 export class SimulationWebSocket {
@@ -280,70 +317,51 @@ export class SimulationWebSocket {
   private maxReconnectAttempts = 5;
   
   constructor(
-    private onStateUpdate: (state: Partial<SimulationState>) => void,
-    private onError?: (error: Error) => void
+    private url: string,
+    private onMessage: (data: SimulationState) => void,
+    private onError?: (error: Event) => void
   ) {}
   
-  connect() {
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/simulation/ws`;
-    
-    this.ws = new WebSocket(wsUrl);
-    
-    this.ws.onopen = () => {
-      console.log('WebSocket connected');
-      this.reconnectAttempts = 0;
-    };
-    
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'state_update' || data.type === 'state') {
-          this.onStateUpdate(data.data || data);
+  connect(): void {
+    try {
+      const wsUrl = this.url.replace('http', 'ws');
+      this.ws = new WebSocket(`${wsUrl}/simulation/ws`);
+      
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          this.onMessage(data);
+        } catch (err) {
+          console.error('Error parsing WebSocket message:', err);
         }
-      } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
-      }
-    };
-    
-    this.ws.onerror = (event) => {
-      console.error('WebSocket error:', event);
-      this.onError?.(new Error('WebSocket connection error'));
-    };
-    
-    this.ws.onclose = () => {
-      console.log('WebSocket closed');
-      this.attemptReconnect();
-    };
-  }
-  
-  private attemptReconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-      console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-      setTimeout(() => this.connect(), delay);
+      };
+      
+      this.ws.onerror = (error) => {
+        if (this.onError) {
+          this.onError(error);
+        }
+      };
+      
+      this.ws.onclose = () => {
+        // Attempt to reconnect
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          setTimeout(() => this.connect(), 1000 * this.reconnectAttempts);
+        }
+      };
+      
+      this.ws.onopen = () => {
+        this.reconnectAttempts = 0;
+      };
+    } catch (err) {
+      console.error('WebSocket connection error:', err);
     }
   }
   
-  disconnect() {
+  disconnect(): void {
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
   }
-  
-  send(message: object) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
-    }
-  }
-  
-  ping() {
-    this.send({ type: 'ping' });
-  }
-  
-  requestState() {
-    this.send({ type: 'get_state' });
-  }
 }
-

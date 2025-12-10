@@ -28,6 +28,7 @@ from ..models.traffic import (
     Intersection,
     SimulationConfig,
     SimulationState,
+    TrafficAlert,
     TrafficFlowData,
     TrafficIncident,
     TrafficLight,
@@ -43,6 +44,7 @@ from ..simulation.engine import get_simulation_engine
 traffic_router = APIRouter(prefix="/traffic", tags=["Traffic Data"])
 simulation_router = APIRouter(prefix="/simulation", tags=["Simulation"])
 dashboard_router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+alert_router = APIRouter(prefix="/alerts", tags=["Alerts"])
 
 
 # ============================================================
@@ -137,13 +139,42 @@ async def get_traffic_flow(
     bbox = BoundingBox(north=north, south=south, east=east, west=west)
     
     try:
+        # Calculate adaptive grid size based on bounding box area
+        # Larger areas get more sample points for better coverage
+        area = (bbox.north - bbox.south) * (bbox.east - bbox.west)
+        
+        # Determine grid size based on area
+        # Increased grid sizes for better road coverage
+        # More sample points = better chance of hitting all roads
+        if area > 1000:
+            grid_size = 12  # 144 points for very large areas
+        elif area > 100:
+            grid_size = 12  # 144 points for large areas (increased from 10)
+        elif area > 10:
+            grid_size = 10  # 100 points for medium areas (increased from 8)
+        else:
+            grid_size = 8   # 64 points for small areas (increased from 6)
+        
         # Fetch traffic data from TomTom API (parallel requests for performance)
-        data = await tomtom.get_traffic_flow_tiles(bbox)
+        # Pass None to let the service calculate grid_size, or pass explicit value
+        data = await tomtom.get_traffic_flow_tiles(bbox, grid_size=grid_size)
         
         # Update simulation engine with real-world data
         # This allows simulation to adjust spawn rates and speeds based on actual congestion
         engine = get_simulation_engine()
         engine.update_real_traffic_data(data)
+        
+        # Save historical snapshot
+        try:
+            from ..services.history import get_history_service
+            history_service = get_history_service()
+            # Get current metrics if available
+            metrics = None
+            if hasattr(engine.state, 'metrics'):
+                metrics = engine.state.metrics
+            history_service.save_snapshot(data, metrics)
+        except Exception as e:
+            print(f"Error saving historical snapshot: {e}")
         
         return data
     except Exception as e:
@@ -164,6 +195,268 @@ async def get_segment_data(lat: float, lng: float, zoom: int = 12):
         raise HTTPException(status_code=404, detail="No segment found at this location")
     
     return segment
+
+
+@traffic_router.get("/search")
+async def search_location(q: str, limit: int = 10):
+    """
+    Search for locations by name or address.
+    
+    Uses TomTom Search API with fallback to OpenStreetMap Nominatim.
+    Returns matching locations with coordinates and bounding boxes.
+    
+    Args:
+        q: Search query (e.g., "New York", "Times Square")
+        limit: Maximum number of results (default 10)
+    
+    Returns:
+        List of location results with name, coordinates, bounds, and address
+    """
+    tomtom = get_tomtom_service()
+    try:
+        results = await tomtom.search_location(q, limit=limit)
+        return {"results": results, "query": q}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@traffic_router.post("/export")
+async def export_traffic_data(
+    format: str,
+    north: Optional[float] = None,
+    south: Optional[float] = None,
+    east: Optional[float] = None,
+    west: Optional[float] = None,
+):
+    """
+    Export traffic data in various formats.
+    
+    Query Parameters:
+        format: Export format ('csv', 'json', or 'pdf')
+        north, south, east, west: Optional bounding box (uses current data if not provided)
+    
+    Returns:
+        File download with exported data
+    """
+    """
+    Export traffic data in various formats.
+    
+    Args:
+        format: Export format ('csv', 'json', or 'pdf')
+        north, south, east, west: Optional bounding box (uses current data if not provided)
+    
+    Returns:
+        File download with exported data
+    """
+    from fastapi.responses import Response
+    from ..services.export import export_to_csv, export_to_json, export_to_pdf
+    from ..services.tomtom import get_tomtom_service
+    
+    tomtom = get_tomtom_service()
+    
+    # Get traffic data
+    if north and south and east and west:
+        bbox = BoundingBox(north=north, south=south, east=east, west=west)
+        traffic_data = await tomtom.get_traffic_flow_tiles(bbox)
+        incidents = await tomtom.get_incidents(bbox)
+    else:
+        # Use current simulation data if available
+        engine = get_simulation_engine()
+        if engine._real_traffic_data:
+            traffic_data = engine._real_traffic_data
+            incidents = []
+        else:
+            raise HTTPException(status_code=400, detail="No data available. Provide bounding box or load traffic data first.")
+    
+    # Export based on format
+    if format.lower() == 'csv':
+        content = export_to_csv(traffic_data, incidents)
+        return Response(
+            content=content,
+            media_type='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="traffic_data_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv"'}
+        )
+    elif format.lower() == 'json':
+        content = export_to_json(traffic_data, incidents)
+        return Response(
+            content=content,
+            media_type='application/json',
+            headers={'Content-Disposition': f'attachment; filename="traffic_data_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.json"'}
+        )
+    elif format.lower() == 'pdf':
+        try:
+            content = export_to_pdf(traffic_data, incidents)
+            return Response(
+                content=content,
+                media_type='application/pdf',
+                headers={'Content-Disposition': f'attachment; filename="traffic_data_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.pdf"'}
+            )
+        except ImportError:
+            raise HTTPException(status_code=500, detail="PDF export requires reportlab. Install with: pip install reportlab")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Use 'csv', 'json', or 'pdf'.")
+
+
+@traffic_router.get("/history")
+async def get_historical_data(
+    time_range: str = "hour",  # "hour", "day", "week"
+    north: Optional[float] = None,
+    south: Optional[float] = None,
+    east: Optional[float] = None,
+    west: Optional[float] = None,
+):
+    """
+    Get historical traffic data and trends.
+    
+    Args:
+        time_range: Time range ("hour", "day", "week")
+        north, south, east, west: Optional bounding box filter
+    
+    Returns:
+        Historical data with trends
+    """
+    from ..services.history import get_history_service
+    
+    history_service = get_history_service()
+    bbox = None
+    
+    if north and south and east and west:
+        bbox = BoundingBox(north=north, south=south, east=east, west=west)
+    
+    trends = history_service.get_trends(time_range, bbox)
+    return trends
+
+
+@traffic_router.get("/route")
+async def calculate_route(
+    start_lat: float,
+    start_lng: float,
+    end_lat: float,
+    end_lng: float,
+    alternatives: bool = False,
+):
+    """
+    Calculate route between two points.
+    
+    Args:
+        start_lat, start_lng: Starting coordinates
+        end_lat, end_lng: Destination coordinates
+        alternatives: Whether to return alternative routes
+    
+    Returns:
+        List of routes with geometry, distance, time, and delays
+    """
+    tomtom = get_tomtom_service()
+    start = Coordinates(lat=start_lat, lng=start_lng)
+    end = Coordinates(lat=end_lat, lng=end_lng)
+    
+    try:
+        routes = await tomtom.calculate_route(start, end, alternatives)
+        return {"routes": routes}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Route calculation failed: {str(e)}")
+
+
+# ============================================================
+# ALERTS ENDPOINTS
+# ============================================================
+
+
+class AlertCreateRequest(BaseModel):
+    """Request to create an alert."""
+    name: str
+    north: float
+    south: float
+    east: float
+    west: float
+    conditions: dict
+
+
+@alert_router.get("")
+async def get_alerts() -> list[TrafficAlert]:
+    """Get all user alerts."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    return service.get_alerts()
+
+
+@alert_router.post("")
+async def create_alert(request: AlertCreateRequest) -> TrafficAlert:
+    """Create a new alert."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    bbox = BoundingBox(
+        north=request.north,
+        south=request.south,
+        east=request.east,
+        west=request.west,
+    )
+    return service.create_alert(request.name, bbox, request.conditions)
+
+
+@alert_router.get("/{alert_id}")
+async def get_alert(alert_id: str) -> TrafficAlert:
+    """Get a specific alert."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    alert = service.get_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
+@alert_router.put("/{alert_id}")
+async def update_alert(alert_id: str, updates: dict) -> TrafficAlert:
+    """Update an alert."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    alert = service.update_alert(alert_id, **updates)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
+@alert_router.delete("/{alert_id}")
+async def delete_alert(alert_id: str):
+    """Delete an alert."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    if not service.delete_alert(alert_id):
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"status": "deleted"}
+
+
+@alert_router.get("/{alert_id}/history")
+async def get_alert_history(alert_id: str) -> list[dict]:
+    """Get trigger history for an alert."""
+    from ..services.alerts import get_alert_service
+    service = get_alert_service()
+    return service.get_alert_history(alert_id)
+
+
+@traffic_router.get("/check-alerts")
+async def check_alerts(
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+) -> list[dict]:
+    """
+    Check alerts for current traffic data.
+    
+    This endpoint is called periodically to check if any alerts should trigger.
+    """
+    from ..services.alerts import get_alert_service
+    from ..services.tomtom import get_tomtom_service
+    
+    tomtom = get_tomtom_service()
+    alert_service = get_alert_service()
+    
+    bbox = BoundingBox(north=north, south=south, east=east, west=west)
+    traffic_data = await tomtom.get_traffic_flow_tiles(bbox)
+    
+    triggered = alert_service.check_alerts(traffic_data)
+    return triggered
 
 
 @traffic_router.get("/incidents")

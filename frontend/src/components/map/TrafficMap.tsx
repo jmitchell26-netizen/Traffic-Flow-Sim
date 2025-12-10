@@ -28,6 +28,8 @@ import {
 } from '../../types/traffic';
 import { SegmentPopup } from './SegmentPopup';
 import { CanvasVehicleLayer } from './CanvasVehicleLayer';
+import { LocationSearch } from './LocationSearch';
+import { RoutePlanner } from './RoutePlanner';
 import {
   filterSegmentsByViewport,
   filterSegmentsByZoom,
@@ -75,14 +77,15 @@ function MapController() {
       // Clear any pending update
       clearTimeout(timeoutId);
       
-      // Debounce: wait 300ms after movement stops before updating store
-      // This prevents updates during rapid panning/zooming
+      // Debounce: wait 500ms after movement stops before updating store
+      // Longer delay reduces store updates and API calls during rapid panning
       timeoutId = setTimeout(() => {
         const center = map.getCenter();
         const zoom = map.getZoom();
         const bounds = map.getBounds();
         
         // Update store with current map state
+        // Store actual bounds for accurate viewport calculations
         setMapView({
           center: { lat: center.lat, lng: center.lng },
           zoom,
@@ -93,7 +96,7 @@ function MapController() {
             west: bounds.getWest(),
           },
         });
-      }, 300); // 300ms debounce delay
+      }, 500); // 500ms debounce delay - smoother updates
     };
 
     // Listen for map movement and zoom events
@@ -328,9 +331,10 @@ function MapControls() {
   const handleZoomIn = () => setMapView({ zoom: mapView.zoom + 1 });
   const handleZoomOut = () => setMapView({ zoom: Math.max(1, mapView.zoom - 1) });
   const handleRecenter = () => {
+    // Reset to world view - allows user to navigate anywhere
     setMapView({
-      center: { lat: 40.7128, lng: -74.0060 },
-      zoom: 13,
+      center: { lat: 20.0, lng: 0.0 },
+      zoom: 3,
     });
   };
 
@@ -461,76 +465,86 @@ export function TrafficMap() {
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         />
 
-        {/* Traffic segments */}
-        {trafficData?.segments && (
+        {/* Traffic segments - Show at all zoom levels (filtered by LOD) */}
+        {trafficData?.segments && trafficData.segments.length > 0 && (
           <SegmentLayer
             segments={trafficData.segments}
             onSelect={handleSegmentSelect}
           />
         )}
 
-        {/* Traffic lights */}
-        {simulationState?.traffic_lights && (
+        {/* Traffic lights - Only show when zoomed in enough to see them */}
+        {mapView.zoom >= 10 && simulationState?.traffic_lights && simulationState.traffic_lights.length > 0 && (
           <TrafficLightLayer lights={simulationState.traffic_lights} />
         )}
 
-        {/* Simulated vehicles */}
-        {simulationState?.vehicles && (
+        {/* Simulated vehicles - Only show when zoomed in enough to see them */}
+        {mapView.zoom >= 10 && simulationState?.vehicles && simulationState.vehicles.length > 0 && (
           <VehicleLayer vehicles={simulationState.vehicles} />
         )}
 
-        {/* Incidents */}
+        {/* Incidents - Show at all zoom levels */}
         {incidents.length > 0 && <IncidentLayer incidents={incidents} />}
-        {simulationState?.active_incidents && (
+        {simulationState?.active_incidents && simulationState.active_incidents.length > 0 && (
           <IncidentLayer incidents={simulationState.active_incidents} />
         )}
+
+        {/* Route Planner */}
+        <RoutePlanner />
       </MapContainer>
 
       <MapControls />
       <MapLegend />
 
-      {/* Loading Overlay */}
+      {/* Loading Overlay - Show when loading */}
       {isLoading && (
-        <div className="absolute inset-0 z-[2000] bg-dash-bg/50 backdrop-blur-sm flex items-center justify-center">
-          <div className="bg-dash-card border border-dash-border rounded-lg p-6 flex flex-col items-center gap-3">
-            <Loader2 className="w-8 h-8 text-dash-accent animate-spin" />
-            <span className="text-sm text-dash-text">Loading traffic data...</span>
+        <div className="absolute inset-0 z-[2000] bg-dash-bg/30 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+          <div className="bg-dash-card/90 border border-dash-border rounded-lg p-4 flex flex-col items-center gap-2">
+            <Loader2 className="w-6 h-6 text-dash-accent animate-spin" />
+            <span className="text-xs text-dash-text">Loading traffic data...</span>
           </div>
         </div>
       )}
 
-      {/* Stats overlay */}
-      <div className="absolute top-4 left-4 z-[1000] bg-dash-card/90 backdrop-blur-sm border border-dash-border rounded-lg p-4">
-        <div className="text-xs text-dash-muted mb-2">Traffic Summary</div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-          <div className="text-dash-muted">Segments:</div>
-          <div className="text-dash-text font-medium">
-            {trafficData?.total_segments ?? trafficData?.segments?.length ?? 0}
-          </div>
-          <div className="text-dash-muted">Congested:</div>
-          <div className="text-congestion-heavy font-medium">
-            {trafficData?.congested_segments ?? 
-             trafficData?.segments?.filter(s => s.congestion_level === 'heavy' || s.congestion_level === 'severe').length ?? 0}
-          </div>
-          <div className="text-dash-muted">Avg Speed:</div>
-          <div className="text-dash-accent font-medium">
-            {trafficData
-              ? `${Math.round(trafficData.average_speed_ratio * 100)}%`
-              : trafficData?.segments?.length
-              ? `${Math.round(
-                  (trafficData.segments.reduce((sum, s) => sum + s.speed_ratio, 0) /
-                    trafficData.segments.length) *
-                    100
-                )}%`
-              : '—'}
-          </div>
-        </div>
-        {trafficData?.segments && trafficData.segments.length === 0 && (
-          <div className="mt-2 text-xs text-yellow-400">
-            No traffic data available for this area
-          </div>
-        )}
+      {/* Location Search */}
+      <div className="absolute top-4 left-4 z-[1000]">
+        <LocationSearch />
       </div>
+
+      {/* Stats overlay - Show when have data */}
+      {trafficData && (
+        <div className="absolute top-4 left-[450px] z-[1000] bg-dash-card/90 backdrop-blur-sm border border-dash-border rounded-lg p-4">
+          <div className="text-xs text-dash-muted mb-2">Traffic Summary</div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+            <div className="text-dash-muted">Segments:</div>
+            <div className="text-dash-text font-medium">
+              {trafficData?.total_segments ?? trafficData?.segments?.length ?? 0}
+            </div>
+            <div className="text-dash-muted">Congested:</div>
+            <div className="text-congestion-heavy font-medium">
+              {trafficData?.congested_segments ?? 
+               trafficData?.segments?.filter(s => s.congestion_level === 'heavy' || s.congestion_level === 'severe').length ?? 0}
+            </div>
+            <div className="text-dash-muted">Avg Speed:</div>
+            <div className="text-dash-accent font-medium">
+              {trafficData
+                ? `${Math.round(trafficData.average_speed_ratio * 100)}%`
+                : trafficData?.segments?.length
+                ? `${Math.round(
+                    (trafficData.segments.reduce((sum, s) => sum + s.speed_ratio, 0) /
+                      trafficData.segments.length) *
+                      100
+                  )}%`
+                : '—'}
+            </div>
+          </div>
+          {trafficData?.segments && trafficData.segments.length === 0 && !isLoading && (
+            <div className="mt-2 text-xs text-yellow-400">
+              No traffic data available for this area
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -12,7 +12,7 @@
 import { useState, useEffect } from 'react';
 import { Trophy, Target, Clock, Zap, Star, Award, TrendingUp } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
-import type { TrafficMetrics } from '../../types/traffic';
+import { AchievementNotification } from './AchievementNotification';
 
 interface GameObjective {
   id: string;
@@ -81,6 +81,24 @@ const INITIAL_OBJECTIVES: GameObjective[] = [
     reward: 200,  // Highest reward for active management
     completed: false,
   },
+  {
+    id: 'adjust-lights',
+    title: 'Traffic Light Master',
+    description: 'Adjust 5 traffic lights',
+    target: 5,
+    current: 0,
+    reward: 150,
+    completed: false,
+  },
+  {
+    id: 'maintain-flow',
+    title: 'Maintain Flow',
+    description: 'Keep speed above 75% for 2 minutes',
+    target: 120,  // 2 minutes in seconds
+    current: 0,
+    reward: 250,
+    completed: false,
+  },
 ];
 
 const ACHIEVEMENTS: Achievement[] = [
@@ -138,8 +156,12 @@ export function GameMode() {
         };
   });
 
+  const [, setScoreDelta] = useState<number | null>(null);
+  const [lastUnlockedAchievement, setLastUnlockedAchievement] = useState<Achievement | null>(null);
+
   const dashboardData = useTrafficStore((s) => s.dashboardData);
   const simulationState = useTrafficStore((s) => s.simulationState);
+  const gameActions = useTrafficStore((s) => s.gameActions);
 
   /**
    * Update game state based on current simulation metrics.
@@ -181,15 +203,36 @@ export function GameMode() {
           completed = current <= obj.target;
           break;
         case 'clear-incidents':
-          // TODO: Track incident removals separately
-          // This would require additional state tracking
+          // Track incident removals from game actions
+          current = gameActions.incidentsRemoved;
+          completed = current >= obj.target;
+          break;
+        case 'adjust-lights':
+          // Track traffic light adjustments
+          current = gameActions.trafficLightsAdjusted;
+          completed = current >= obj.target;
+          break;
+        case 'maintain-flow':
+          // Track sustained performance (simplified - would need time tracking)
+          // For now, check if current speed is above threshold
+          if (metrics.average_speed >= 75) {
+            current = Math.min(obj.current + 1, obj.target); // Increment by 1 second
+          } else {
+            current = 0; // Reset if speed drops
+          }
+          completed = current >= obj.target;
           break;
       }
 
       // Award points when objective is first completed
       if (completed && !obj.completed) {
-        newState.score += obj.reward;
+        const reward = obj.reward;
+        newState.score += reward;
         newState.totalVehiclesHelped += 10;  // Bonus: helped vehicles
+        
+        // Show score delta animation
+        setScoreDelta(reward);
+        setTimeout(() => setScoreDelta(null), 2000);
       }
 
       return { ...obj, current, completed };
@@ -201,16 +244,35 @@ export function GameMode() {
 
       let unlocked = false;
       switch (ach.id) {
+        case 'first-light':
+          unlocked = gameActions.trafficLightsAdjusted >= 1;
+          break;
         case 'speed-demon':
           unlocked = metrics.average_speed >= 90;
           break;
+        case 'incident-solver':
+          unlocked = gameActions.incidentsRemoved >= 5;
+          break;
         case 'congestion-buster':
-          unlocked = newState.congestionReduced >= 50;
+          // Calculate congestion reduction (simplified)
+          const baseCongestion = 100; // Assume starting congestion
+          const currentCongestion = (1 - (metrics.average_speed / 100)) * 100;
+          unlocked = (baseCongestion - currentCongestion) >= 50;
+          break;
+        case 'perfect-flow':
+          // Track sustained performance (would need time-based tracking)
+          unlocked = metrics.average_speed >= 95;
           break;
       }
 
       if (unlocked && !ach.unlocked) {
         newState.score += 50;
+        setLastUnlockedAchievement(ach);
+        setTimeout(() => setLastUnlockedAchievement(null), 5000);
+        
+        // Show score delta
+        setScoreDelta(50);
+        setTimeout(() => setScoreDelta(null), 2000);
       }
 
       return { ...ach, unlocked, unlockedAt: unlocked ? new Date() : ach.unlockedAt };
@@ -221,9 +283,23 @@ export function GameMode() {
       newState.bestScore = newState.score;
     }
 
+    // Calculate continuous score based on traffic flow quality
+    // Base score: traffic flow efficiency (speed ratio * vehicles helped)
+    const flowEfficiency = (metrics.average_speed / 100) * (simulationState?.total_vehicles || 0);
+    const continuousScore = Math.floor(flowEfficiency * 0.1); // Small continuous points
+    
+    // Add continuous score
+    newState.score += continuousScore;
+    
+    // Calculate level based on score milestones (every 1000 points = 1 level)
+    const newLevel = Math.floor(newState.score / 1000) + 1;
+    if (newLevel > newState.level) {
+      newState.level = newLevel;
+    }
+
     setGameState(newState);
     localStorage.setItem('traffic-game-state', JSON.stringify(newState));
-  }, [dashboardData, simulationState]);
+  }, [dashboardData, simulationState, gameActions]);
 
   // Timer countdown
   useEffect(() => {
@@ -250,6 +326,12 @@ export function GameMode() {
 
   return (
     <div className="h-full overflow-auto p-6 bg-dash-bg">
+      {/* Achievement Notification */}
+      <AchievementNotification
+        achievement={lastUnlockedAchievement}
+        onClose={() => setLastUnlockedAchievement(null)}
+      />
+      
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -359,14 +441,14 @@ export function GameMode() {
                     </span>
                   </div>
                   <div className="h-2 bg-dash-border rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        objective.completed ? 'bg-green-400' : 'bg-dash-accent'
-                      }`}
-                      style={{
-                        width: `${Math.min(100, (objective.current / objective.target) * 100)}%`,
-                      }}
-                    />
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      objective.completed ? 'bg-green-400' : 'bg-dash-accent'
+                    }`}
+                    style={{
+                      width: `${Math.min(100, (objective.current / objective.target) * 100)}%`,
+                    }}
+                  />
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-dash-muted">Reward</span>

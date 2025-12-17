@@ -1,0 +1,244 @@
+{
+  "snapshots": [
+    {
+      "timestamp": "2025-12-17T15:36:22.093882",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:36:22.093882",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:36:22.093882",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:46:47.941860",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:57:31.317613",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:57:31.317613",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:57:31.317613",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:59:54.705240",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:59:54.705240",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-17T15:59:54.705240",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    }
+  ]
+}

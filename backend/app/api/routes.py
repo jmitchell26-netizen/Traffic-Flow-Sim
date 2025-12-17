@@ -38,6 +38,12 @@ from ..models.traffic import (
 )
 from ..services.tomtom import get_tomtom_service
 from ..simulation.engine import get_simulation_engine
+from ..utils.coordinates import validate_bounding_box
+from ..constants import SUPPORTED_EXPORT_FORMATS
+from ..api.models import TrafficLightTimingRequest
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Create API routers with prefixes and tags for OpenAPI documentation
@@ -64,14 +70,6 @@ class PointRequest(BaseModel):
     lat: float
     lng: float
     zoom: int = 12
-
-
-class TrafficLightTimingRequest(BaseModel):
-    """Request to adjust traffic light timing."""
-    light_id: str
-    green_duration: Optional[int] = None
-    yellow_duration: Optional[int] = None
-    red_duration: Optional[int] = None
 
 
 class IncidentRequest(BaseModel):
@@ -139,21 +137,9 @@ async def get_traffic_flow(
     bbox = BoundingBox(north=north, south=south, east=east, west=west)
     
     try:
-        # Calculate adaptive grid size based on bounding box area
-        # Larger areas get more sample points for better coverage
-        area = (bbox.north - bbox.south) * (bbox.east - bbox.west)
-        
-        # Determine grid size based on area
-        # Increased grid sizes for better road coverage
-        # More sample points = better chance of hitting all roads
-        if area > 1000:
-            grid_size = 12  # 144 points for very large areas
-        elif area > 100:
-            grid_size = 12  # 144 points for large areas (increased from 10)
-        elif area > 10:
-            grid_size = 10  # 100 points for medium areas (increased from 8)
-        else:
-            grid_size = 8   # 64 points for small areas (increased from 6)
+        # Grid size calculation is now handled by the service
+        # Pass None to use adaptive grid sizing
+        grid_size = None
         
         # Fetch traffic data from TomTom API (parallel requests for performance)
         # Pass None to let the service calculate grid_size, or pass explicit value
@@ -161,20 +147,35 @@ async def get_traffic_flow(
         
         # Update simulation engine with real-world data
         # This allows simulation to adjust spawn rates and speeds based on actual congestion
-        engine = get_simulation_engine()
-        engine.update_real_traffic_data(data)
+        try:
+            engine = get_simulation_engine()
+            engine.update_real_traffic_data(data)
+        except Exception as e:
+            from ..core.logging import get_logger
+            logger = get_logger(__name__)
+            logger.warning(f"Error updating simulation engine: {e}")
+            # Continue even if simulation update fails
         
-        # Save historical snapshot
+        # Save historical snapshot (non-blocking)
         try:
             from ..services.history import get_history_service
+            from ..core.logging import get_logger
+            logger = get_logger(__name__)
             history_service = get_history_service()
             # Get current metrics if available
             metrics = None
-            if hasattr(engine.state, 'metrics'):
-                metrics = engine.state.metrics
+            try:
+                engine = get_simulation_engine()
+                if hasattr(engine, 'state') and hasattr(engine.state, 'metrics'):
+                    metrics = engine.state.metrics
+            except:
+                pass  # Ignore if metrics unavailable
             history_service.save_snapshot(data, metrics)
         except Exception as e:
-            print(f"Error saving historical snapshot: {e}")
+            from ..core.logging import get_logger
+            logger = get_logger(__name__)
+            logger.warning(f"Error saving historical snapshot: {e}")
+            # Don't fail the request if history save fails
         
         return data
     except Exception as e:
@@ -256,16 +257,26 @@ async def export_traffic_data(
     
     # Get traffic data
     if north and south and east and west:
+        # Validate bounding box using utility
         bbox = BoundingBox(north=north, south=south, east=east, west=west)
+        is_valid, error_msg = validate_bounding_box(bbox)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
         traffic_data = await tomtom.get_traffic_flow_tiles(bbox)
-        incidents = await tomtom.get_incidents(bbox)
+        try:
+            incidents = await tomtom.get_incidents(bbox)
+        except Exception:
+            incidents = []  # Don't fail export if incidents fail
     else:
         # Use current simulation data if available
-        engine = get_simulation_engine()
-        if engine._real_traffic_data:
-            traffic_data = engine._real_traffic_data
-            incidents = []
-        else:
+        try:
+            engine = get_simulation_engine()
+            if engine._real_traffic_data:
+                traffic_data = engine._real_traffic_data
+                incidents = []
+            else:
+                raise HTTPException(status_code=400, detail="No data available. Provide bounding box or load traffic data first.")
+        except AttributeError:
             raise HTTPException(status_code=400, detail="No data available. Provide bounding box or load traffic data first.")
     
     # Export based on format
@@ -294,7 +305,10 @@ async def export_traffic_data(
         except ImportError:
             raise HTTPException(status_code=500, detail="PDF export requires reportlab. Install with: pip install reportlab")
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Use 'csv', 'json', or 'pdf'.")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported format: {format}. Supported formats: {', '.join(SUPPORTED_EXPORT_FORMATS)}"
+        )
 
 
 @traffic_router.get("/history")
@@ -516,8 +530,27 @@ async def get_simulation_state() -> SimulationState:
     """
     Get the current simulation state.
     """
-    engine = get_simulation_engine()
-    return engine.state
+    try:
+        engine = get_simulation_engine()
+        state = engine.state
+        
+        # Validate state before returning
+        # This will catch any Pydantic validation errors
+        if not isinstance(state, SimulationState):
+            raise ValueError(f"Invalid state type: {type(state)}")
+        
+        # Ensure timestamp is valid
+        if not hasattr(state, 'timestamp') or state.timestamp is None:
+            logger.warning("State missing timestamp, setting to now")
+            state.timestamp = datetime.utcnow()
+        
+        return state
+    except Exception as e:
+        logger.error(f"Error getting simulation state: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get simulation state: {str(e)}"
+        )
 
 
 @simulation_router.post("/start")
@@ -525,15 +558,58 @@ async def start_simulation():
     """
     Start the simulation engine.
     """
-    engine = get_simulation_engine()
-    if engine._running:
-        return {"status": "already_running"}
-    
-    # Start in background (in production, use proper task management)
-    import asyncio
-    asyncio.create_task(engine.start())
-    
-    return {"status": "started"}
+    try:
+        engine = get_simulation_engine()
+        if engine._running:
+            logger.info("Simulation already running")
+            return {"status": "already_running"}
+        
+        # Check if there's already a task running
+        if hasattr(engine, '_task') and engine._task and not engine._task.done():
+            logger.warning("Simulation task already exists but engine not marked as running")
+            engine._task.cancel()
+        
+        # Start in background using the current event loop
+        import asyncio
+        try:
+            # Get or create event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop, get the event loop
+                loop = asyncio.get_event_loop()
+            
+            # Create task to run simulation in background
+            task = loop.create_task(engine.start())
+            engine._task = task
+            
+            # Give it a moment to start
+            await asyncio.sleep(0.01)
+            
+            # Check if task failed immediately
+            if task.done():
+                try:
+                    await task  # This will raise the exception if it failed
+                except Exception as task_error:
+                    logger.error(f"Simulation task failed immediately: {task_error}", exc_info=True)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Simulation failed to start: {str(task_error)}"
+                    )
+            
+            logger.info("Simulation started successfully")
+            return {"status": "started"}
+        except RuntimeError as e:
+            logger.error(f"Event loop error: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create simulation task: {str(e)}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting simulation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to start simulation: {str(e)}")
 
 
 @simulation_router.post("/stop")
@@ -566,13 +642,33 @@ async def get_simulation_config() -> SimulationConfig:
 
 
 @simulation_router.put("/config")
-async def update_simulation_config(config: SimulationConfig):
+async def update_simulation_config(config: dict):
     """
     Update simulation configuration.
+    Accepts partial config updates and merges with existing config.
     """
     engine = get_simulation_engine()
-    engine.config = config
-    return {"status": "updated", "config": config}
+    
+    # Merge partial config with existing config
+    current_config_dict = engine.config.model_dump()
+    
+    # Handle profile_distribution if it's in the update (convert string keys to DriverProfile enum)
+    if 'profile_distribution' in config:
+        from ..models.traffic import DriverProfile
+        profile_dist = {}
+        for key, value in config['profile_distribution'].items():
+            if isinstance(key, str):
+                profile_dist[DriverProfile(key)] = value
+            else:
+                profile_dist[key] = value
+        config['profile_distribution'] = profile_dist
+    
+    updated_config_dict = {**current_config_dict, **config}
+    
+    # Create new config object with updated values
+    engine.config = SimulationConfig(**updated_config_dict)
+    
+    return {"status": "updated", "config": engine.config}
 
 
 @simulation_router.post("/intersection")
@@ -611,12 +707,29 @@ async def adjust_traffic_light(request: TrafficLightTimingRequest):
     Adjust traffic light timing.
     """
     engine = get_simulation_engine()
-    engine.adjust_traffic_light_timing(
+    
+    # Validate that at least one timing value is provided
+    if request.green_duration is None and request.yellow_duration is None and request.red_duration is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one timing value (green_duration, yellow_duration, or red_duration) must be provided"
+        )
+    
+    # Adjust the traffic light timing
+    result = engine.adjust_traffic_light_timing(
         light_id=request.light_id,
         green_duration=request.green_duration,
         yellow_duration=request.yellow_duration,
         red_duration=request.red_duration,
     )
+    
+    # Check if the light was found
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Traffic light with ID '{request.light_id}' not found"
+        )
+    
     return {"status": "updated"}
 
 

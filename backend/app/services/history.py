@@ -10,8 +10,12 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List
 from pathlib import Path
+import logging
 
 from ..models.traffic import TrafficFlowData, BoundingBox, TrafficMetrics
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class HistoryService:
@@ -97,7 +101,7 @@ class HistoryService:
             with open(filename, 'w') as f:
                 json.dump(hour_data, f, indent=2)
         except Exception as e:
-            print(f"Error saving snapshot: {e}")
+            logger.error(f"Error saving snapshot: {e}", exc_info=True)
     
     def get_historical_data(
         self,
@@ -120,17 +124,27 @@ class HistoryService:
         
         # Check in-memory cache first
         for snapshot in self._recent_cache:
-            snapshot_time = datetime.fromisoformat(snapshot["timestamp"])
-            if start_time <= snapshot_time <= end_time:
-                # Check bounding box if provided
-                if bbox:
-                    snap_bbox = snapshot["bounding_box"]
-                    # Simple overlap check
-                    if not (snap_bbox["east"] < bbox.west or snap_bbox["west"] > bbox.east or
-                            snap_bbox["north"] < bbox.south or snap_bbox["south"] > bbox.north):
-                        results.append(snapshot)
+            try:
+                # Handle both string and datetime timestamps
+                if isinstance(snapshot["timestamp"], str):
+                    snapshot_time = datetime.fromisoformat(snapshot["timestamp"].replace('Z', '+00:00'))
                 else:
-                    results.append(snapshot)
+                    snapshot_time = snapshot["timestamp"]
+                
+                if start_time <= snapshot_time <= end_time:
+                    # Check bounding box if provided
+                    if bbox:
+                        snap_bbox = snapshot.get("bounding_box", {})
+                        # Simple overlap check with validation
+                        if snap_bbox and all(k in snap_bbox for k in ["north", "south", "east", "west"]):
+                            if not (snap_bbox["east"] < bbox.west or snap_bbox["west"] > bbox.east or
+                                    snap_bbox["north"] < bbox.south or snap_bbox["south"] > bbox.north):
+                                results.append(snapshot)
+                    else:
+                        results.append(snapshot)
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning(f"Error processing snapshot: {e}")
+                continue
         
         # Load from files
         current = start_time.replace(minute=0, second=0, microsecond=0)
@@ -142,18 +156,28 @@ class HistoryService:
                         hour_data = json.load(f)
                     
                     for snapshot in hour_data.get("snapshots", []):
-                        snapshot_time = datetime.fromisoformat(snapshot["timestamp"])
-                        if start_time <= snapshot_time <= end_time:
-                            # Check bounding box if provided
-                            if bbox:
-                                snap_bbox = snapshot["bounding_box"]
-                                if not (snap_bbox["east"] < bbox.west or snap_bbox["west"] > bbox.east or
-                                        snap_bbox["north"] < bbox.south or snap_bbox["south"] > bbox.north):
-                                    results.append(snapshot)
+                        try:
+                            # Handle both string and datetime timestamps
+                            if isinstance(snapshot.get("timestamp"), str):
+                                snapshot_time = datetime.fromisoformat(snapshot["timestamp"].replace('Z', '+00:00'))
                             else:
-                                results.append(snapshot)
+                                snapshot_time = snapshot.get("timestamp")
+                            
+                            if snapshot_time and start_time <= snapshot_time <= end_time:
+                                # Check bounding box if provided
+                                if bbox:
+                                    snap_bbox = snapshot.get("bounding_box", {})
+                                    if snap_bbox and all(k in snap_bbox for k in ["north", "south", "east", "west"]):
+                                        if not (snap_bbox["east"] < bbox.west or snap_bbox["west"] > bbox.east or
+                                                snap_bbox["north"] < bbox.south or snap_bbox["south"] > bbox.north):
+                                            results.append(snapshot)
+                                else:
+                                    results.append(snapshot)
+                        except (ValueError, KeyError, TypeError) as e:
+                            logger.warning(f"Error processing snapshot from file: {e}")
+                            continue
                 except Exception as e:
-                    print(f"Error loading snapshot file {filename}: {e}")
+                    logger.error(f"Error loading snapshot file {filename}: {e}", exc_info=True)
             
             current += timedelta(hours=1)
         
@@ -197,24 +221,39 @@ class HistoryService:
                 "trend": "stable",
             }
         
-        # Calculate averages
-        speed_ratios = [s["summary"]["average_speed_ratio"] for s in snapshots if s.get("summary")]
+        # Calculate averages (handle missing or invalid data)
+        speed_ratios = [
+            s["summary"]["average_speed_ratio"] 
+            for s in snapshots 
+            if s.get("summary") and s["summary"].get("average_speed_ratio") is not None
+        ]
         avg_speed_ratio = sum(speed_ratios) / len(speed_ratios) if speed_ratios else 0
         
         # Calculate trend (comparing first half to second half)
+        trend = "stable"  # Default
         if len(snapshots) >= 4:
             mid = len(snapshots) // 2
-            first_half_avg = sum([s["summary"]["average_speed_ratio"] for s in snapshots[:mid] if s.get("summary")]) / mid
-            second_half_avg = sum([s["summary"]["average_speed_ratio"] for s in snapshots[mid:] if s.get("summary")]) / (len(snapshots) - mid)
+            first_half_ratios = [
+                s["summary"]["average_speed_ratio"] 
+                for s in snapshots[:mid] 
+                if s.get("summary") and s["summary"].get("average_speed_ratio") is not None
+            ]
+            second_half_ratios = [
+                s["summary"]["average_speed_ratio"] 
+                for s in snapshots[mid:] 
+                if s.get("summary") and s["summary"].get("average_speed_ratio") is not None
+            ]
             
-            if second_half_avg > first_half_avg * 1.05:
-                trend = "improving"
-            elif second_half_avg < first_half_avg * 0.95:
-                trend = "worsening"
-            else:
-                trend = "stable"
-        else:
-            trend = "stable"
+            if first_half_ratios and second_half_ratios:
+                first_half_avg = sum(first_half_ratios) / len(first_half_ratios)
+                second_half_avg = sum(second_half_ratios) / len(second_half_ratios)
+                
+                if second_half_avg > first_half_avg * 1.05:
+                    trend = "improving"
+                elif second_half_avg < first_half_avg * 0.95:
+                    trend = "worsening"
+                else:
+                    trend = "stable"
         
         return {
             "time_range": time_range,

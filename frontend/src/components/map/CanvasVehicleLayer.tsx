@@ -138,7 +138,7 @@ export function CanvasVehicleLayer({ vehicles }: CanvasVehicleLayerProps) {
       // Clear entire canvas before redrawing
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const bounds = map.getBounds();
+      // const bounds = map.getBounds();
       const zoom = map.getZoom();
 
       // Don't render vehicles at very low zoom levels (performance optimization)

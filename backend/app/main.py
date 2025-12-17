@@ -28,7 +28,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import traffic_router, simulation_router, dashboard_router, alert_router
 from .core.config import get_settings
+from .core.logging import setup_logging, get_logger
 from .services.tomtom import get_tomtom_service
+from .middleware.rate_limit import RateLimitMiddleware
+from .middleware.logging_middleware import LoggingMiddleware
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -53,20 +58,23 @@ async def lifespan(app: FastAPI):
     Yields:
         Control back to FastAPI (application runs)
     """
-    # Startup: Print configuration and initialize
-    print("🚗 Traffic Flow Simulation API starting up...")
+    # Startup: Initialize logging and configuration
+    setup_logging(log_level="INFO")
+    logger.info("🚗 Traffic Flow Simulation API starting up...")
+    
     settings = get_settings()
-    print(f"   Map center: ({settings.default_map_center_lat}, {settings.default_map_center_lng})")
-    print(f"   Poll interval: {settings.traffic_poll_interval_seconds}s")
-    print(f"   Max vehicles: {settings.max_simulated_vehicles}")
+    logger.info(f"   Map center: ({settings.default_map_center_lat}, {settings.default_map_center_lng})")
+    logger.info(f"   Poll interval: {settings.traffic_poll_interval_seconds}s")
+    logger.info(f"   Max vehicles: {settings.max_simulated_vehicles}")
     
     # Yield control to FastAPI - application runs here
     yield
     
     # Shutdown: Clean up resources
-    print("🛑 Shutting down...")
+    logger.info("🛑 Shutting down...")
     tomtom = get_tomtom_service()
     await tomtom.close()  # Close HTTP client connections
+    logger.info("✅ Shutdown complete")
 
 
 def create_app() -> FastAPI:
@@ -123,6 +131,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
         allow_headers=["*"],  # Allow all headers
     )
+    
+    # Add request/response logging middleware
+    app.add_middleware(LoggingMiddleware)
+    
+    # Add rate limiting middleware (100 requests per 60 seconds per IP)
+    app.add_middleware(RateLimitMiddleware, max_requests=100, window_seconds=60)
     
     # Register API routers
     # Each router handles a group of related endpoints

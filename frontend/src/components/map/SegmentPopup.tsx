@@ -18,7 +18,7 @@ interface SegmentPopupProps {
 }
 
 export function SegmentPopup({ segment }: SegmentPopupProps) {
-  const delayMinutes = Math.round(segment.delay_seconds / 60);
+  // const delayMinutes = Math.round(segment.delay_seconds / 60);
   const speedPercent = Math.round(segment.speed_ratio * 100);
 
   return (

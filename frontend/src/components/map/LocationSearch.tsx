@@ -23,7 +23,7 @@ export function LocationSearch() {
   const [isSearching, setIsSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const searchTimeoutRef = useRef<NodeJS.Timeout>();
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const setMapView = useTrafficStore((s) => s.setMapView);
 
@@ -55,7 +55,15 @@ export function LocationSearch() {
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         const response = await trafficApi.searchLocation(query.trim(), 8);
-        setResults(response.results);
+        // Validate results
+        const validResults = (response.results || []).filter(
+          r => r && r.coordinates && 
+               typeof r.coordinates.lat === 'number' && 
+               typeof r.coordinates.lng === 'number' &&
+               !isNaN(r.coordinates.lat) && 
+               !isNaN(r.coordinates.lng)
+        );
+        setResults(validResults);
       } catch (err) {
         console.error('Search failed:', err);
         setResults([]);
@@ -72,11 +80,24 @@ export function LocationSearch() {
   }, [query]);
 
   const handleSelectLocation = useCallback((location: LocationResult) => {
+    // Validate location coordinates
+    if (!location.coordinates || 
+        isNaN(location.coordinates.lat) || 
+        isNaN(location.coordinates.lng)) {
+      console.error('Invalid location coordinates');
+      return;
+    }
+
     // Navigate to location
     setMapView({
       center: location.coordinates,
       zoom: 13, // Good zoom level for city view
-      bounds: location.bounds,
+      bounds: location.bounds || {
+        north: location.coordinates.lat + 0.01,
+        south: location.coordinates.lat - 0.01,
+        east: location.coordinates.lng + 0.01,
+        west: location.coordinates.lng - 0.01,
+      },
     });
 
     // Add to recent searches

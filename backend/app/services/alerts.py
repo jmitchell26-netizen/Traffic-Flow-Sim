@@ -9,8 +9,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+import logging
 
 from ..models.traffic import TrafficAlert, TrafficFlowData, BoundingBox
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class AlertService:
@@ -47,7 +51,7 @@ class AlertService:
                     self._alerts = [TrafficAlert(**alert) for alert in data.get("alerts", [])]
                     self._alert_history = data.get("history", [])
             except Exception as e:
-                print(f"Error loading alerts: {e}")
+                logger.error(f"Error loading alerts: {e}", exc_info=True)
                 self._alerts = []
                 self._alert_history = []
         else:
@@ -64,7 +68,7 @@ class AlertService:
             with open(self.storage_file, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
         except Exception as e:
-            print(f"Error saving alerts: {e}")
+            logger.error(f"Error saving alerts: {e}", exc_info=True)
     
     def create_alert(
         self,

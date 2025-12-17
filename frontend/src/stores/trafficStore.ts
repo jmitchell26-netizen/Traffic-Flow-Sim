@@ -87,6 +87,19 @@ interface TrafficStore {
   error: string | null;
   setError: (error: string | null) => void;
   
+  // Game action tracking
+  gameActions: {
+    trafficLightsAdjusted: number;
+    incidentsRemoved: number;
+    intersectionsCreated: number;
+    incidentsAdded: number;
+  };
+  trackTrafficLightAdjustment: () => void;
+  trackIncidentRemoval: () => void;
+  trackIntersectionCreation: () => void;
+  trackIncidentAddition: () => void;
+  resetGameActions: () => void;
+  
     // Computed / derived values
     /**
      * Calculate bounding box from current map view.
@@ -184,6 +197,51 @@ export const useTrafficStore = create<TrafficStore>()(
     setIsLoading: (isLoading) => set({ isLoading }),
     error: null,
     setError: (error) => set({ error }),
+    
+    // Game action tracking
+    gameActions: {
+      trafficLightsAdjusted: 0,
+      incidentsRemoved: 0,
+      intersectionsCreated: 0,
+      incidentsAdded: 0,
+    },
+    trackTrafficLightAdjustment: () =>
+      set((state) => ({
+        gameActions: {
+          ...state.gameActions,
+          trafficLightsAdjusted: state.gameActions.trafficLightsAdjusted + 1,
+        },
+      })),
+    trackIncidentRemoval: () =>
+      set((state) => ({
+        gameActions: {
+          ...state.gameActions,
+          incidentsRemoved: state.gameActions.incidentsRemoved + 1,
+        },
+      })),
+    trackIntersectionCreation: () =>
+      set((state) => ({
+        gameActions: {
+          ...state.gameActions,
+          intersectionsCreated: state.gameActions.intersectionsCreated + 1,
+        },
+      })),
+    trackIncidentAddition: () =>
+      set((state) => ({
+        gameActions: {
+          ...state.gameActions,
+          incidentsAdded: state.gameActions.incidentsAdded + 1,
+        },
+      })),
+    resetGameActions: () =>
+      set({
+        gameActions: {
+          trafficLightsAdjusted: 0,
+          incidentsRemoved: 0,
+          intersectionsCreated: 0,
+          incidentsAdded: 0,
+        },
+      }),
     
     // Computed values
     /**

@@ -11,16 +11,13 @@
 
 import { useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet';
-import { Layers, ZoomIn, ZoomOut, Locate, Plus, Loader2, RefreshCw } from 'lucide-react';
+import { Layers, ZoomIn, ZoomOut, Locate, Loader2, RefreshCw } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
 import { useMapBoundsTracker } from '../../hooks/useTrafficData';
 import { trafficApi } from '../../services/api';
 import {
   CONGESTION_COLORS,
   TRAFFIC_LIGHT_COLORS,
-  getCongestionLabel,
-  formatSpeed,
-  formatDuration,
   type RoadSegment,
   type SimulatedVehicle,
   type TrafficLight,
@@ -71,7 +68,7 @@ function MapController() {
    * Updates center, zoom, and bounds for viewport culling.
    */
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout>;
 
     const handleMoveEnd = () => {
       // Clear any pending update
@@ -433,9 +430,6 @@ export function TrafficMap() {
   const mapView = useTrafficStore((s) => s.mapView);
   const isLoading = useTrafficStore((s) => s.isLoading);
   const setSelectedFeature = useTrafficStore((s) => s.setSelectedFeature);
-  const setTrafficData = useTrafficStore((s) => s.setTrafficData);
-  const setIsLoading = useTrafficStore((s) => s.setIsLoading);
-  const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
 
   // Track map bounds changes and fetch new data (debounced)
   // This hook handles both traffic flow and incidents
@@ -527,11 +521,11 @@ export function TrafficMap() {
             </div>
             <div className="text-dash-muted">Avg Speed:</div>
             <div className="text-dash-accent font-medium">
-              {trafficData
+              {trafficData?.average_speed_ratio
                 ? `${Math.round(trafficData.average_speed_ratio * 100)}%`
                 : trafficData?.segments?.length
                 ? `${Math.round(
-                    (trafficData.segments.reduce((sum, s) => sum + s.speed_ratio, 0) /
+                    (trafficData.segments.reduce((sum: number, s: RoadSegment) => sum + s.speed_ratio, 0) /
                       trafficData.segments.length) *
                       100
                   )}%`

@@ -6,7 +6,6 @@
 
 import { useState, useEffect } from 'react';
 import { Clock, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { trafficApi } from '../../services/api';
 import type { BoundingBox } from '../../types/traffic';
 import {
   LineChart,
@@ -35,6 +34,11 @@ export function HistoryPanel({ bbox }: HistoryPanelProps) {
     const fetchHistory = async () => {
       if (!bbox) return;
       
+      // Validate bounding box
+      if (isNaN(bbox.north) || isNaN(bbox.south) || isNaN(bbox.east) || isNaN(bbox.west)) {
+        return;
+      }
+      
       setIsLoading(true);
       try {
         const params = new URLSearchParams({
@@ -46,10 +50,14 @@ export function HistoryPanel({ bbox }: HistoryPanelProps) {
         });
         
         const response = await fetch(`/api/traffic/history?${params}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
         setHistoryData(data);
       } catch (err) {
         console.error('Failed to fetch history:', err);
+        setHistoryData(null); // Clear data on error
       } finally {
         setIsLoading(false);
       }

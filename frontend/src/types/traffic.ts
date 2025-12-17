@@ -160,14 +160,14 @@ export interface SimulationState {
 }
 
 export interface SimulationConfig {
-  tick_interval_ms: number;
-  max_vehicles: number;
-  spawn_rate: number;
-  base_acceleration: number;
-  base_deceleration: number;
-  min_following_distance: number;
-  speed_variance: number;
-  profile_distribution: Record<DriverProfile, number>;
+  tick_interval_ms?: number;
+  max_vehicles?: number;
+  spawn_rate?: number;
+  base_acceleration?: number;
+  base_deceleration?: number;
+  min_following_distance?: number;
+  speed_variance?: number;
+  profile_distribution?: Record<DriverProfile, number>;
 }
 
 // ============================================================

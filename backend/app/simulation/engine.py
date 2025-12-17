@@ -10,6 +10,7 @@ import asyncio
 import math
 import random
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional, Callable
 
@@ -28,6 +29,9 @@ from ..models.traffic import (
     VehicleType,
     EmissionsEstimate,
 )
+
+# Set up logger for simulation engine
+logger = logging.getLogger(__name__)
 
 
 class SimulationEngine:
@@ -83,11 +87,40 @@ class SimulationEngine:
         Note: This is an async function that runs indefinitely.
         Use stop() to terminate the loop.
         """
+        # Validate configuration before starting
+        if not hasattr(self.config, 'tick_interval_ms') or self.config.tick_interval_ms <= 0:
+            raise ValueError("Invalid tick_interval_ms configuration")
+        
         self._running = True
-        while self._running:
-            await self.tick()  # Execute one simulation step
-            # Wait for configured tick interval before next tick
-            await asyncio.sleep(self.config.tick_interval_ms / 1000)
+        logger.info("Simulation engine started")
+        
+        try:
+            while self._running:
+                try:
+                    await self.tick()  # Execute one simulation step
+                except asyncio.CancelledError:
+                    # Task was cancelled, exit gracefully
+                    logger.info("Simulation cancelled")
+                    break
+                except Exception as e:
+                    # Log error but continue simulation to prevent crashes
+                    logger.error(f"Error in simulation tick: {e}", exc_info=True)
+                    # Continue running - don't crash the entire simulation
+                finally:
+                    # Wait for configured tick interval before next tick
+                    if self._running:  # Only sleep if still running
+                        try:
+                            tick_interval = max(0.01, self.config.tick_interval_ms / 1000)  # Minimum 10ms
+                            await asyncio.sleep(tick_interval)
+                        except asyncio.CancelledError:
+                            break
+                        except Exception as e:
+                            logger.error(f"Error in sleep: {e}", exc_info=True)
+                            # Fallback to 100ms if sleep fails
+                            await asyncio.sleep(0.1)
+        finally:
+            self._running = False
+            logger.info("Simulation engine stopped")
     
     def stop(self):
         """
@@ -97,6 +130,13 @@ class SimulationEngine:
         to exit on the next iteration. Simulation state is preserved.
         """
         self._running = False
+        # Cancel the background task if it exists
+        if hasattr(self, '_task') and self._task and not self._task.done():
+            try:
+                self._task.cancel()
+            except Exception as e:
+                logger.warning(f"Error canceling simulation task: {e}")
+        self._task = None
     
     def reset(self):
         """
@@ -161,16 +201,52 @@ class SimulationEngine:
             i for i in self.state.active_incidents if i.id != incident_id
         ]
     
+    def _get_incident_effect(self, vehicle: SimulatedVehicle) -> float | None:
+        """
+        Get the speed limit effect from nearby incidents.
+        Returns the maximum speed allowed, or None if no effect.
+        """
+        min_speed = None
+        
+        for incident in self.state.active_incidents:
+            distance = self._calculate_distance(vehicle.position, incident.location)
+            
+            # Different impact radius based on incident type
+            impact_radii = {
+                'accident': 0.002,      # ~200m
+                'construction': 0.003,  # ~300m
+                'closure': 0.005,       # ~500m
+                'slowdown': 0.001,      # ~100m
+                'event': 0.002,        # ~200m
+            }
+            radius = impact_radii.get(incident.type, 0.002)
+            
+            if distance < radius:
+                # Gradual effect: stronger closer to incident
+                distance_factor = 1.0 - (distance / radius)
+                
+                # Different speed reductions by type
+                speed_reductions = {
+                    'accident': 0.3,      # 70% reduction
+                    'construction': 0.5,  # 50% reduction
+                    'closure': 0.0,        # Complete stop
+                    'slowdown': 0.7,      # 30% reduction
+                    'event': 0.4,         # 60% reduction
+                }
+                reduction = speed_reductions.get(incident.type, 0.5)
+                
+                # Apply gradual effect
+                affected_speed = vehicle.target_speed * (1.0 - reduction * distance_factor)
+                
+                if min_speed is None or affected_speed < min_speed:
+                    min_speed = affected_speed
+        
+        return min_speed
+    
     def _apply_incident_effects(self, incident: TrafficIncident):
-        """Apply effects of an incident to nearby vehicles."""
-        # Slow down vehicles near the incident
-        for vehicle in self.state.vehicles:
-            distance = self._calculate_distance(
-                vehicle.position, incident.location
-            )
-            if distance < 500:  # Within 500 meters
-                slowdown_factor = 1 - (incident.severity * 0.15)
-                vehicle.target_speed *= max(0.1, slowdown_factor)
+        """Apply effects of an incident to nearby vehicles (legacy method, now handled in _update_vehicle)."""
+        # Effects are now applied dynamically in _update_vehicle via _get_incident_effect
+        pass
     
     # ============================================================
     # CORE SIMULATION TICK
@@ -181,31 +257,66 @@ class SimulationEngine:
         Execute one simulation tick.
         Updates all vehicles, traffic lights, and computes metrics.
         """
-        self.state.tick += 1
-        self.state.timestamp = datetime.utcnow()
-        dt = self.config.tick_interval_ms / 1000  # Delta time in seconds
-        
-        # Phase 1: Spawn new vehicles
-        self._spawn_vehicles(dt)
-        
-        # Phase 2: Update traffic lights
-        self._update_traffic_lights(dt)
-        
-        # Phase 3: Update vehicle positions
-        for vehicle in self.state.vehicles:
-            self._update_vehicle(vehicle, dt)
-        
-        # Phase 4: Handle collisions / interactions
-        self._handle_vehicle_interactions()
-        
-        # Phase 5: Remove completed vehicles
-        self._remove_completed_vehicles()
-        
-        # Phase 6: Update metrics
-        self._update_metrics()
-        
-        # Notify listeners
-        self._notify_listeners()
+        try:
+            self.state.tick += 1
+            self.state.timestamp = datetime.utcnow()
+            dt = self.config.tick_interval_ms / 1000  # Delta time in seconds
+            
+            # Validate dt to prevent division by zero or negative values
+            if dt <= 0:
+                logger.warning(f"Invalid tick interval: {dt}, using default 0.1s")
+                dt = 0.1
+            
+            # Phase 1: Spawn new vehicles
+            try:
+                self._spawn_vehicles(dt)
+            except Exception as e:
+                logger.error(f"Error spawning vehicles: {e}", exc_info=True)
+            
+            # Phase 2: Update traffic lights
+            try:
+                self._update_traffic_lights(dt)
+            except Exception as e:
+                logger.error(f"Error updating traffic lights: {e}", exc_info=True)
+            
+            # Phase 3: Update vehicle positions
+            # Use list copy to avoid modification during iteration
+            vehicles_to_update = list(self.state.vehicles)
+            for vehicle in vehicles_to_update:
+                try:
+                    self._update_vehicle(vehicle, dt)
+                except Exception as e:
+                    logger.error(f"Error updating vehicle {vehicle.id}: {e}", exc_info=True)
+                    # Remove problematic vehicle to prevent further errors
+                    if vehicle in self.state.vehicles:
+                        self.state.vehicles.remove(vehicle)
+            
+            # Phase 4: Handle collisions / interactions
+            try:
+                self._handle_vehicle_interactions()
+            except Exception as e:
+                logger.error(f"Error handling vehicle interactions: {e}", exc_info=True)
+            
+            # Phase 5: Remove completed vehicles
+            try:
+                self._remove_completed_vehicles()
+            except Exception as e:
+                logger.error(f"Error removing completed vehicles: {e}", exc_info=True)
+            
+            # Phase 6: Update metrics
+            try:
+                self._update_metrics()
+            except Exception as e:
+                logger.error(f"Error updating metrics: {e}", exc_info=True)
+            
+            # Notify listeners
+            try:
+                self._notify_listeners()
+            except Exception as e:
+                logger.error(f"Error notifying listeners: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Critical error in simulation tick: {e}", exc_info=True)
+            raise  # Re-raise to be caught by start() loop
     
     # ============================================================
     # VEHICLE SPAWNING
@@ -264,10 +375,15 @@ class SimulationEngine:
     def _get_spawn_position(self) -> Coordinates:
         """Get a valid spawn position for a new vehicle."""
         # If we have real traffic data, spawn on actual road segments
-        if self._real_traffic_data and self._real_traffic_data.segments:
-            segment = random.choice(self._real_traffic_data.segments)
-            if segment.coordinates:
-                return segment.coordinates[0]
+        try:
+            if self._real_traffic_data and self._real_traffic_data.segments:
+                valid_segments = [s for s in self._real_traffic_data.segments if s.coordinates]
+                if valid_segments:
+                    segment = random.choice(valid_segments)
+                    if segment.coordinates and len(segment.coordinates) > 0:
+                        return segment.coordinates[0]
+        except Exception as e:
+            logger.warning(f"Error getting spawn position from traffic data: {e}")
         
         # Fallback: spawn at edge of default map area
         settings_lat = 40.7128
@@ -298,7 +414,27 @@ class SimulationEngine:
                 vehicle.waiting_at_light = False
             return
         
-        # Accelerate/decelerate towards target speed
+        # Check for incidents affecting this vehicle
+        incident_effect = self._get_incident_effect(vehicle)
+        if incident_effect:
+            # Apply incident-based speed reduction
+            vehicle.target_speed = min(vehicle.target_speed, incident_effect)
+        
+        # Check for vehicles ahead (better following distance)
+        vehicle_ahead = self._find_vehicle_ahead(vehicle)
+        if vehicle_ahead:
+            # Calculate safe following distance (time-based: 2 seconds)
+            safe_distance = vehicle.current_speed / 3.6 * 2.0  # Convert km/h to m/s, then 2 seconds
+            actual_distance = self._calculate_distance(vehicle.position, vehicle_ahead.position) * 111000  # Convert to meters
+            
+            if actual_distance < safe_distance:
+                # Too close - slow down to match or be slower than vehicle ahead
+                vehicle.target_speed = min(
+                    vehicle.target_speed,
+                    vehicle_ahead.current_speed * 0.9
+                )
+        
+        # Accelerate/decelerate towards target speed with realistic curves
         speed_diff = vehicle.target_speed - vehicle.current_speed
         
         # Driver profile affects acceleration
@@ -308,18 +444,25 @@ class SimulationEngine:
             DriverProfile.CAUTIOUS: 0.7,
             DriverProfile.LEARNER: 0.5,
         }
-        accel_mod = accel_modifiers[vehicle.driver_profile]
+        accel_mod = accel_modifiers.get(vehicle.driver_profile, 1.0)
+        
+        # More realistic acceleration curve (faster at low speeds, slower at high speeds)
+        speed_factor = max(0.1, 1.0 - (vehicle.current_speed / 120.0) * 0.3)  # Reduce acceleration at high speeds
+        
+        # Get acceleration/deceleration values with defaults
+        base_accel = getattr(self.config, 'base_acceleration', 2.0)
+        base_decel = getattr(self.config, 'base_deceleration', 4.0)
         
         if speed_diff > 0:
             # Accelerating
-            accel = self.config.base_acceleration * accel_mod
+            accel = base_accel * accel_mod * speed_factor
             vehicle.current_speed = min(
                 vehicle.target_speed,
                 vehicle.current_speed + accel * dt * 3.6  # Convert m/s² to km/h change
             )
         elif speed_diff < 0:
             # Decelerating
-            decel = self.config.base_deceleration * accel_mod
+            decel = base_decel * accel_mod
             vehicle.current_speed = max(
                 vehicle.target_speed,
                 vehicle.current_speed - decel * dt * 3.6
@@ -334,16 +477,34 @@ class SimulationEngine:
         # Move vehicle
         distance_km = (vehicle.current_speed * dt) / 3600  # km traveled
         
+        # Validate distance to prevent invalid positions
+        if distance_km <= 0 or not vehicle.position:
+            return
+        
         # Convert heading to radians and compute new position
         heading_rad = math.radians(vehicle.heading)
         
         # Approximate conversion (1 degree lat ≈ 111km, 1 degree lng varies)
+        # Protect against division by zero in cos calculation
+        lat_rad = math.radians(vehicle.position.lat)
+        cos_lat = math.cos(lat_rad)
+        if abs(cos_lat) < 0.0001:  # Near poles, use safe value
+            cos_lat = 0.0001 if cos_lat >= 0 else -0.0001
+        
         lat_change = distance_km * math.cos(heading_rad) / 111
-        lng_change = distance_km * math.sin(heading_rad) / (111 * math.cos(math.radians(vehicle.position.lat)))
+        lng_change = distance_km * math.sin(heading_rad) / (111 * cos_lat)
+        
+        # Validate new position coordinates
+        new_lat = vehicle.position.lat + lat_change
+        new_lng = vehicle.position.lng + lng_change
+        
+        # Clamp to valid coordinate ranges
+        new_lat = max(-90, min(90, new_lat))
+        new_lng = max(-180, min(180, new_lng))
         
         vehicle.position = Coordinates(
-            lat=vehicle.position.lat + lat_change,
-            lng=vehicle.position.lng + lng_change
+            lat=new_lat,
+            lng=new_lng
         )
     
     def _can_proceed(self, vehicle: SimulatedVehicle) -> bool:
@@ -356,17 +517,29 @@ class SimulationEngine:
     
     def _should_stop_at_light(self, vehicle: SimulatedVehicle) -> bool:
         """Check if vehicle should stop at upcoming light."""
-        for intersection in self.state.intersections:
-            distance = self._calculate_distance(vehicle.position, intersection.location)
+        try:
+            base_decel = getattr(self.config, 'base_deceleration', 4.0)
+            if base_decel <= 0:
+                base_decel = 4.0  # Safety fallback
             
-            # Check lights within stopping distance
-            stopping_distance = (vehicle.current_speed ** 2) / (2 * self.config.base_deceleration * 3.6)
-            
-            if distance < stopping_distance + 10:  # 10m buffer
-                for light in intersection.traffic_lights:
-                    if vehicle.current_segment_id in light.controlled_segment_ids:
-                        if light.current_phase != TrafficLightPhase.GREEN:
-                            return True
+            for intersection in self.state.intersections:
+                distance = self._calculate_distance(vehicle.position, intersection.location)
+                
+                # Check lights within stopping distance
+                # Avoid division by zero
+                if vehicle.current_speed <= 0:
+                    stopping_distance = 0
+                else:
+                    stopping_distance = (vehicle.current_speed ** 2) / (2 * base_decel * 3.6)
+                
+                if distance < stopping_distance + 10:  # 10m buffer
+                    for light in intersection.traffic_lights:
+                        if vehicle.current_segment_id in light.controlled_segment_ids:
+                            if light.current_phase != TrafficLightPhase.GREEN:
+                                return True
+        except Exception as e:
+            logger.warning(f"Error checking traffic light stop: {e}")
+        
         return False
     
     # ============================================================
@@ -374,25 +547,41 @@ class SimulationEngine:
     # ============================================================
     
     def _update_traffic_lights(self, dt: float):
-        """Update all traffic light states."""
+        """Update traffic light phases based on timing with smart adjustments."""
         for intersection in self.state.intersections:
+            # Count waiting vehicles at this intersection
+            waiting_count = sum(
+                1 for v in self.state.vehicles
+                if v.waiting_at_light and
+                self._calculate_distance(v.position, intersection.location) < 50
+            )
+            
+            # Smart timing: extend green if many vehicles waiting
             for light in intersection.traffic_lights:
                 light.time_in_current_phase += dt
                 
-                # Check for phase transition
-                if light.current_phase == TrafficLightPhase.GREEN:
-                    if light.time_in_current_phase >= light.green_duration:
-                        light.current_phase = TrafficLightPhase.YELLOW
-                        light.time_in_current_phase = 0
+                # Determine base phase duration
+                base_phase_duration = {
+                    TrafficLightPhase.RED: light.red_duration,
+                    TrafficLightPhase.YELLOW: light.yellow_duration,
+                    TrafficLightPhase.GREEN: light.green_duration,
+                }[light.current_phase]
                 
-                elif light.current_phase == TrafficLightPhase.YELLOW:
-                    if light.time_in_current_phase >= light.yellow_duration:
+                # Extend green phase if many vehicles waiting (up to 50% longer)
+                phase_duration = base_phase_duration
+                if light.current_phase == TrafficLightPhase.GREEN and waiting_count > 5:
+                    phase_duration = base_phase_duration * (1.0 + min(0.5, waiting_count * 0.05))
+                
+                # Transition to next phase if duration exceeded
+                if light.time_in_current_phase >= phase_duration:
+                    if light.current_phase == TrafficLightPhase.RED:
+                        light.current_phase = TrafficLightPhase.GREEN
+                        light.time_in_current_phase = 0
+                    elif light.current_phase == TrafficLightPhase.YELLOW:
                         light.current_phase = TrafficLightPhase.RED
                         light.time_in_current_phase = 0
-                
-                elif light.current_phase == TrafficLightPhase.RED:
-                    if light.time_in_current_phase >= light.red_duration:
-                        light.current_phase = TrafficLightPhase.GREEN
+                    elif light.current_phase == TrafficLightPhase.GREEN:
+                        light.current_phase = TrafficLightPhase.YELLOW
                         light.time_in_current_phase = 0
     
     def adjust_traffic_light_timing(
@@ -401,8 +590,13 @@ class SimulationEngine:
         green_duration: Optional[int] = None,
         yellow_duration: Optional[int] = None,
         red_duration: Optional[int] = None
-    ):
-        """Adjust timing for a specific traffic light."""
+    ) -> bool:
+        """
+        Adjust timing for a specific traffic light.
+        
+        Returns:
+            True if the light was found and updated, False otherwise
+        """
         for intersection in self.state.intersections:
             for light in intersection.traffic_lights:
                 if light.id == light_id:
@@ -412,7 +606,9 @@ class SimulationEngine:
                         light.yellow_duration = yellow_duration
                     if red_duration is not None:
                         light.red_duration = red_duration
-                    return
+                    return True
+        
+        return False
     
     def add_intersection(self, intersection: Intersection):
         """Add an intersection to the simulation."""
@@ -450,6 +646,39 @@ class SimulationEngine:
                             leader.current_speed * 0.9
                         )
     
+    def _find_vehicle_ahead(self, vehicle: SimulatedVehicle) -> SimulatedVehicle | None:
+        """Find the vehicle directly ahead of this vehicle."""
+        closest_ahead = None
+        min_distance = float('inf')
+        
+        heading_rad = math.radians(vehicle.heading)
+        
+        for other in self.state.vehicles:
+            if other.id == vehicle.id:
+                continue
+            
+            # Calculate distance
+            distance = self._calculate_distance(vehicle.position, other.position)
+            
+            # Check if vehicle is ahead (within 45 degrees of heading)
+            dx = other.position.lng - vehicle.position.lng
+            dy = other.position.lat - vehicle.position.lat
+            
+            # Project onto heading direction
+            projection = dx * math.sin(heading_rad) + dy * math.cos(heading_rad)
+            
+            # Check if ahead and within reasonable distance (200m)
+            if projection > 0 and distance < 0.002:  # ~200m
+                # Check if within 45 degrees of heading
+                angle_to_other = math.degrees(math.atan2(dy, dx))
+                heading_diff = abs(angle_to_other - vehicle.heading)
+                if heading_diff < 45 or heading_diff > 315:
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_ahead = other
+        
+        return closest_ahead
+    
     def _is_behind(self, a: SimulatedVehicle, b: SimulatedVehicle) -> bool:
         """Check if vehicle A is behind vehicle B."""
         # Simplified check based on position relative to heading
@@ -463,20 +692,31 @@ class SimulationEngine:
     
     def _remove_completed_vehicles(self):
         """Remove vehicles that have left the simulation area."""
-        # Define simulation bounds (based on real data or defaults)
-        if self._real_traffic_data:
-            bbox = self._real_traffic_data.bounding_box
-            margin = 0.005  # Small margin outside bbox
-            
-            self.state.vehicles = [
-                v for v in self.state.vehicles
-                if (bbox.south - margin <= v.position.lat <= bbox.north + margin and
-                    bbox.west - margin <= v.position.lng <= bbox.east + margin)
-            ]
-            
-            # Count removed as completed
-            removed = self.state.total_vehicles - len(self.state.vehicles)
-            self.state.vehicles_completed += max(0, removed)
+        try:
+            # Define simulation bounds (based on real data or defaults)
+            if self._real_traffic_data and hasattr(self._real_traffic_data, 'bounding_box'):
+                bbox = self._real_traffic_data.bounding_box
+                margin = 0.005  # Small margin outside bbox
+                
+                # Filter vehicles safely
+                valid_vehicles = []
+                for v in self.state.vehicles:
+                    try:
+                        # Validate vehicle position
+                        if (hasattr(v, 'position') and v.position and
+                            bbox.south - margin <= v.position.lat <= bbox.north + margin and
+                            bbox.west - margin <= v.position.lng <= bbox.east + margin):
+                            valid_vehicles.append(v)
+                    except Exception as e:
+                        logger.warning(f"Error validating vehicle {getattr(v, 'id', 'unknown')}: {e}")
+                        continue
+                
+                # Count removed as completed
+                removed = len(self.state.vehicles) - len(valid_vehicles)
+                self.state.vehicles = valid_vehicles
+                self.state.vehicles_completed += max(0, removed)
+        except Exception as e:
+            logger.error(f"Error removing completed vehicles: {e}", exc_info=True)
     
     # ============================================================
     # METRICS CALCULATION

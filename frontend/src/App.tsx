@@ -16,7 +16,6 @@ import { Dashboard } from './components/dashboard/Dashboard';
 import { SimulationPanel } from './components/simulation/SimulationPanel';
 import { GameMode } from './components/game/GameMode';
 import { AlertManager } from './components/alerts/AlertManager';
-import { useAlerts } from './hooks/useAlerts';
 import { trafficApi, dashboardApi } from './services/api';
 
 function App() {

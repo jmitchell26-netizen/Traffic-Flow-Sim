@@ -1,0 +1,19 @@
+{
+  "snapshots": [
+    {
+      "timestamp": "2025-12-11T07:44:10.910343",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    }
+  ]
+}

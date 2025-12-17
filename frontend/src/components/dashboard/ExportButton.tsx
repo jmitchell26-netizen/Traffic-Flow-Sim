@@ -7,7 +7,6 @@
 import { useState } from 'react';
 import { Download, FileText, FileJson, File, Loader2 } from 'lucide-react';
 import { useTrafficStore } from '../../stores/trafficStore';
-import { trafficApi } from '../../services/api';
 
 export function ExportButton() {
   const [isOpen, setIsOpen] = useState(false);
@@ -17,14 +16,19 @@ export function ExportButton() {
   const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
 
   const handleExport = async () => {
-    if (!trafficData) {
-      alert('No traffic data available to export');
+    if (!trafficData || !trafficData.segments || trafficData.segments.length === 0) {
+      alert('No traffic data available to export. Please load traffic data first.');
       return;
     }
 
     setIsExporting(true);
     try {
       const bbox = getBoundingBox();
+      
+      // Validate bounding box
+      if (isNaN(bbox.north) || isNaN(bbox.south) || isNaN(bbox.east) || isNaN(bbox.west)) {
+        throw new Error('Invalid map bounds');
+      }
       
       // Create URL with query params
       const params = new URLSearchParams({
@@ -44,7 +48,8 @@ export function ExportButton() {
       });
 
       if (!response.ok) {
-        throw new Error('Export failed');
+        const errorText = await response.text();
+        throw new Error(errorText || `Export failed: ${response.status}`);
       }
 
       // Get filename from Content-Disposition header or generate one

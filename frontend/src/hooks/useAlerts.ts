@@ -12,7 +12,7 @@ const POLL_INTERVAL = 30000; // 30 seconds
 
 export function useAlerts() {
   const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
-  const intervalRef = useRef<NodeJS.Timeout>();
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTriggeredRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -24,21 +24,35 @@ export function useAlerts() {
     const checkAlerts = async () => {
       try {
         const bbox = getBoundingBox();
+        
+        // Validate bounding box
+        if (isNaN(bbox.north) || isNaN(bbox.south) || isNaN(bbox.east) || isNaN(bbox.west)) {
+          return;
+        }
+        
         const triggered = await trafficApi.checkAlerts(bbox);
 
         // Show notifications for new triggers
-        for (const trigger of triggered) {
-          const key = `${trigger.alert_id}-${trigger.triggered_at}`;
-          if (!lastTriggeredRef.current.has(key)) {
-            lastTriggeredRef.current.add(key);
+        if (triggered && Array.isArray(triggered)) {
+          for (const trigger of triggered) {
+            if (!trigger || !trigger.alert_id || !trigger.triggered_at) continue;
             
-            // Show browser notification
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(`Traffic Alert: ${trigger.alert_name}`, {
-                body: 'Alert conditions have been met',
-                icon: '/vite.svg',
-                tag: trigger.alert_id, // Prevent duplicate notifications
-              });
+            const key = `${trigger.alert_id}-${trigger.triggered_at}`;
+            if (!lastTriggeredRef.current.has(key)) {
+              lastTriggeredRef.current.add(key);
+              
+              // Show browser notification
+              if ('Notification' in window && Notification.permission === 'granted') {
+                try {
+                  new Notification(`Traffic Alert: ${trigger.alert_name || 'Alert'}`, {
+                    body: 'Alert conditions have been met',
+                    icon: '/vite.svg',
+                    tag: trigger.alert_id, // Prevent duplicate notifications
+                  });
+                } catch (notifErr) {
+                  console.error('Failed to show notification:', notifErr);
+                }
+              }
             }
           }
         }

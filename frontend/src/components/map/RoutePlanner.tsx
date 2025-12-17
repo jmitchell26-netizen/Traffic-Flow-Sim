@@ -5,13 +5,11 @@
  */
 
 import { useState, useEffect } from 'react';
-import { MapPin, Navigation, X, Route as RouteIcon } from 'lucide-react';
+import { X, Route as RouteIcon } from 'lucide-react';
 import { useMap } from 'react-leaflet';
 import { Polyline, Marker, Popup } from 'react-leaflet';
-import { useTrafficStore } from '../../stores/trafficStore';
 import { trafficApi } from '../../services/api';
 import type { Coordinates, Route } from '../../types/traffic';
-import { CONGESTION_COLORS } from '../../types/traffic';
 
 export function RoutePlanner() {
   const [isActive, setIsActive] = useState(false);
@@ -31,7 +29,7 @@ export function RoutePlanner() {
 
       if (!startPoint) {
         setStartPoint(point);
-      } else if (!endPoint) {
+      } else if (!endPoint && startPoint) {
         setEndPoint(point);
         calculateRoute(startPoint, point);
       }
@@ -41,23 +39,46 @@ export function RoutePlanner() {
     return () => {
       map.off('click', handleMapClick);
     };
-  }, [isActive, startPoint, endPoint, map]);
+  }, [isActive, startPoint, endPoint, map]); // calculateRoute is stable, no need to include
 
   const calculateRoute = async (start: Coordinates, end: Coordinates) => {
+    // Validate coordinates
+    if (!start || !end) return;
+    if (isNaN(start.lat) || isNaN(start.lng) || isNaN(end.lat) || isNaN(end.lng)) {
+      alert('Invalid coordinates');
+      return;
+    }
+
     setIsCalculating(true);
     try {
       const response = await trafficApi.calculateRoute(start, end, true);
+      
+      if (!response.routes || response.routes.length === 0) {
+        alert('No routes found between these points');
+        return;
+      }
+
       setRoutes(response.routes);
       setSelectedRouteIndex(0);
       
       // Zoom to fit route
-      if (response.routes.length > 0 && response.routes[0].geometry.length > 0) {
-        const bounds = response.routes[0].geometry.map(c => [c.lat, c.lng] as [number, number]);
-        map.fitBounds(bounds, { padding: [50, 50] });
+      if (response.routes.length > 0 && response.routes[0].geometry && response.routes[0].geometry.length > 0) {
+        const validCoords = response.routes[0].geometry.filter(
+          c => c && typeof c.lat === 'number' && typeof c.lng === 'number' && 
+               !isNaN(c.lat) && !isNaN(c.lng)
+        );
+        if (validCoords.length > 0) {
+          const bounds = validCoords.map(c => [c.lat, c.lng] as [number, number]);
+          map.fitBounds(bounds, { padding: [50, 50] });
+        }
       }
     } catch (err) {
       console.error('Route calculation failed:', err);
-      alert('Failed to calculate route. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to calculate route';
+      alert(`Route calculation failed: ${errorMessage}. Please try different points.`);
+      // Clear points on error so user can try again
+      setStartPoint(null);
+      setEndPoint(null);
     } finally {
       setIsCalculating(false);
     }
@@ -131,7 +152,7 @@ export function RoutePlanner() {
               {/* Route Selector */}
               {routes.length > 1 && (
                 <div className="flex gap-2">
-                  {routes.map((route, idx) => (
+                  {routes.map((_route, idx) => (
                     <button
                       key={idx}
                       onClick={() => setSelectedRouteIndex(idx)}
@@ -213,9 +234,11 @@ export function RoutePlanner() {
         </Marker>
       )}
 
-      {selectedRoute && selectedRoute.geometry.length > 0 && (
+      {selectedRoute && selectedRoute.geometry && selectedRoute.geometry.length > 0 && (
         <Polyline
-          positions={selectedRoute.geometry.map(c => [c.lat, c.lng] as [number, number])}
+          positions={selectedRoute.geometry
+            .filter(c => c && typeof c.lat === 'number' && typeof c.lng === 'number' && !isNaN(c.lat) && !isNaN(c.lng))
+            .map(c => [c.lat, c.lng] as [number, number])}
           color="#06b6d4"
           weight={4}
           opacity={0.8}

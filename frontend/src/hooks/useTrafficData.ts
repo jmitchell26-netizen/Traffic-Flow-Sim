@@ -2,9 +2,9 @@
  * Custom hooks for traffic data fetching and management.
  */
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useTrafficStore } from '../stores/trafficStore';
-import { trafficApi, dashboardApi, SimulationWebSocket } from '../services/api';
+import { trafficApi, dashboardApi } from '../services/api';
 
 /**
  * Hook to fetch and refresh traffic data at regular intervals.
@@ -47,37 +47,8 @@ export function useTrafficPolling(intervalMs: number = 60000) {
   return { refetch: fetchData };
 }
 
-/**
- * Hook to manage WebSocket connection for real-time simulation updates.
- */
-export function useSimulationWebSocket() {
-  const wsRef = useRef<SimulationWebSocket | null>(null);
-  const { setSimulationState, setError } = useTrafficStore();
-
-  useEffect(() => {
-    const ws = new SimulationWebSocket(
-      (state) => {
-        setSimulationState(state as any);
-      },
-      (error) => {
-        setError(error.message);
-      }
-    );
-
-    wsRef.current = ws;
-    ws.connect();
-
-    return () => {
-      ws.disconnect();
-    };
-  }, [setSimulationState, setError]);
-
-  const requestState = useCallback(() => {
-    wsRef.current?.requestState();
-  }, []);
-
-  return { requestState };
-}
+// NOTE: useSimulationWebSocket hook removed - not currently used
+// Simulation state is updated via polling in SimulationPanel component
 
 /**
  * Hook to fetch dashboard metrics at regular intervals.
@@ -86,7 +57,6 @@ export function useDashboardPolling(intervalMs: number = 5000) {
   const {
     setDashboardData,
     addMetricsSnapshot,
-    setError,
   } = useTrafficStore();
 
   const fetchMetrics = useCallback(async () => {
@@ -134,7 +104,7 @@ export function useMapBoundsTracker() {
   const lastBoundsRef = useRef<string | null>(null);
   
   // Store timeout ID for debouncing
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Store abort controller for request cancellation
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -174,7 +144,7 @@ export function useMapBoundsTracker() {
         abortControllerRef.current = abortController;
 
         // Get current zoom from store (may have changed during debounce delay)
-        const currentMapView = useTrafficStore.getState().mapView;
+        // const currentMapView = useTrafficStore.getState().mapView;
         
         // At very low zoom levels (world view), use fewer sample points to avoid massive API calls
         // But still fetch data - we'll filter segments by zoom level for display

@@ -6,17 +6,19 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Bell, Plus, Edit, Trash2, MapPin, X } from 'lucide-react';
+import { Bell, Plus, Trash2, X } from 'lucide-react';
 import { alertsApi } from '../../services/api';
 import { useTrafficStore } from '../../stores/trafficStore';
-import type { TrafficAlert, BoundingBox } from '../../types/traffic';
+
+// TODO: Properly type TrafficAlert when types are fixed
+type TrafficAlert = any;
 
 export function AlertManager() {
   const [alerts, setAlerts] = useState<TrafficAlert[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [editingAlert, setEditingAlert] = useState<TrafficAlert | null>(null);
-  const mapView = useTrafficStore((s) => s.mapView);
+  // const [editingAlert, setEditingAlert] = useState<TrafficAlert | null>(null);
+  // const mapView = useTrafficStore((s) => s.mapView);
   const getBoundingBox = useTrafficStore((s) => s.getBoundingBox);
 
   useEffect(() => {
@@ -36,28 +38,47 @@ export function AlertManager() {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     
+    const name = formData.get('name') as string;
+    if (!name || name.trim().length === 0) {
+      alert('Please enter an alert name');
+      return;
+    }
+    
     const bbox = getBoundingBox();
     const conditions: Record<string, any> = {};
     
     const congestionLevel = formData.get('congestion_level') as string;
     if (congestionLevel) {
       conditions.congestion_level = congestionLevel;
-      conditions.congestion_count = parseInt(formData.get('congestion_count') as string) || 1;
+      const count = formData.get('congestion_count') as string;
+      conditions.congestion_count = count ? parseInt(count) || 1 : 1;
     }
     
     const delayThreshold = formData.get('delay_threshold') as string;
-    if (delayThreshold) {
-      conditions.delay_threshold = parseInt(delayThreshold) * 60; // Convert minutes to seconds
+    if (delayThreshold && delayThreshold.trim()) {
+      const minutes = parseInt(delayThreshold);
+      if (!isNaN(minutes) && minutes > 0) {
+        conditions.delay_threshold = minutes * 60; // Convert minutes to seconds
+      }
     }
     
     const speedThreshold = formData.get('speed_threshold') as string;
-    if (speedThreshold) {
-      conditions.speed_ratio_threshold = parseFloat(speedThreshold) / 100;
+    if (speedThreshold && speedThreshold.trim()) {
+      const percent = parseFloat(speedThreshold);
+      if (!isNaN(percent) && percent >= 0 && percent <= 100) {
+        conditions.speed_ratio_threshold = percent / 100;
+      }
+    }
+
+    // Ensure at least one condition is set
+    if (Object.keys(conditions).length === 0) {
+      alert('Please set at least one alert condition');
+      return;
     }
 
     try {
       await alertsApi.createAlert({
-        name: formData.get('name') as string,
+        name: name.trim(),
         north: bbox.north,
         south: bbox.south,
         east: bbox.east,
@@ -69,7 +90,8 @@ export function AlertManager() {
       e.currentTarget.reset();
     } catch (err) {
       console.error('Failed to create alert:', err);
-      alert('Failed to create alert');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create alert';
+      alert(`Failed to create alert: ${errorMessage}`);
     }
   };
 

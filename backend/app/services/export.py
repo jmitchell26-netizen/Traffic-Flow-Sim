@@ -46,17 +46,28 @@ def export_to_csv(data: TrafficFlowData, incidents: Optional[list[TrafficInciden
     
     # Data rows
     for segment in data.segments:
-        coords_str = '; '.join([f"{c.lat:.6f},{c.lng:.6f}" for c in segment.coordinates])
+        # Safely handle coordinates
+        coords_str = ''
+        if segment.coordinates:
+            try:
+                coords_str = '; '.join([
+                    f"{c.lat:.6f},{c.lng:.6f}" 
+                    for c in segment.coordinates 
+                    if c and hasattr(c, 'lat') and hasattr(c, 'lng')
+                ])
+            except Exception:
+                coords_str = ''
+        
         writer.writerow([
-            segment.id,
+            segment.id or '',
             segment.name or '',
-            segment.current_speed,
-            segment.free_flow_speed,
-            round(segment.speed_ratio * 100, 2),
-            segment.congestion_level,
-            segment.delay_seconds,
-            segment.current_travel_time,
-            segment.free_flow_travel_time,
+            segment.current_speed or 0,
+            segment.free_flow_speed or 0,
+            round((segment.speed_ratio or 0) * 100, 2),
+            segment.congestion_level or 'unknown',
+            segment.delay_seconds or 0,
+            segment.current_travel_time or 0,
+            segment.free_flow_travel_time or 0,
             segment.road_type or '',
             coords_str,
         ])
@@ -91,10 +102,12 @@ def export_to_csv(data: TrafficFlowData, incidents: Optional[list[TrafficInciden
     # Summary section
     writer.writerow([])
     writer.writerow(['SUMMARY'])
-    writer.writerow(['Total Segments', data.total_segments])
-    writer.writerow(['Congested Segments', data.congested_segments])
-    writer.writerow(['Average Speed Ratio', f"{data.average_speed_ratio * 100:.2f}%"])
-    writer.writerow(['Timestamp', data.timestamp.isoformat()])
+    writer.writerow(['Total Segments', data.total_segments or len(data.segments or [])])
+    writer.writerow(['Congested Segments', data.congested_segments or 0])
+    speed_ratio = (data.average_speed_ratio or 0) * 100
+    writer.writerow(['Average Speed Ratio', f"{speed_ratio:.2f}%"])
+    timestamp_str = data.timestamp.isoformat() if data.timestamp else datetime.utcnow().isoformat()
+    writer.writerow(['Timestamp', timestamp_str])
     
     return output.getvalue()
 
@@ -113,7 +126,7 @@ def export_to_json(data: TrafficFlowData, incidents: Optional[list[TrafficIncide
     export_data = {
         'metadata': {
             'exported_at': datetime.utcnow().isoformat(),
-            'source': data.source,
+            'source': data.source or 'tomtom',
             'bounding_box': {
                 'north': data.bounding_box.north,
                 'south': data.bounding_box.south,
@@ -121,26 +134,26 @@ def export_to_json(data: TrafficFlowData, incidents: Optional[list[TrafficIncide
                 'west': data.bounding_box.west,
             },
             'summary': {
-                'total_segments': data.total_segments,
-                'congested_segments': data.congested_segments,
-                'average_speed_ratio': data.average_speed_ratio,
+                'total_segments': data.total_segments or len(data.segments or []),
+                'congested_segments': data.congested_segments or 0,
+                'average_speed_ratio': data.average_speed_ratio or 0,
             },
         },
         'segments': [
             {
-                'id': s.id,
-                'name': s.name,
-                'coordinates': [[c.lat, c.lng] for c in s.coordinates],
-                'current_speed': s.current_speed,
-                'free_flow_speed': s.free_flow_speed,
-                'speed_ratio': s.speed_ratio,
-                'congestion_level': s.congestion_level,
-                'delay_seconds': s.delay_seconds,
-                'current_travel_time': s.current_travel_time,
-                'free_flow_travel_time': s.free_flow_travel_time,
-                'road_type': s.road_type,
+                'id': s.id or '',
+                'name': s.name or '',
+                'coordinates': [[c.lat, c.lng] for c in (s.coordinates or []) if c and hasattr(c, 'lat') and hasattr(c, 'lng')],
+                'current_speed': s.current_speed or 0,
+                'free_flow_speed': s.free_flow_speed or 0,
+                'speed_ratio': s.speed_ratio or 0,
+                'congestion_level': s.congestion_level or 'unknown',
+                'delay_seconds': s.delay_seconds or 0,
+                'current_travel_time': s.current_travel_time or 0,
+                'free_flow_travel_time': s.free_flow_travel_time or 0,
+                'road_type': s.road_type or '',
             }
-            for s in data.segments
+            for s in (data.segments or [])
         ],
     }
     

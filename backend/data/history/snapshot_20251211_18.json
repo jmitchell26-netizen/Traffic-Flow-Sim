@@ -1,0 +1,109 @@
+{
+  "snapshots": [
+    {
+      "timestamp": "2025-12-11T18:26:10.504326",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:26:10.504326",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:27:10.349023",
+      "bounding_box": {
+        "north": 72.71190310803662,
+        "south": -12.897489183755892,
+        "east": 104.94140625000001,
+        "west": -153.45703125000003
+      },
+      "summary": {
+        "total_segments": 15,
+        "congested_segments": 1,
+        "average_speed_ratio": 0.9333333333333333
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:42:25.520840",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:42:25.520840",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:45:19.354314",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    },
+    {
+      "timestamp": "2025-12-11T18:45:19.354314",
+      "bounding_box": {
+        "north": 20.010986328125,
+        "south": 19.989013671875,
+        "east": 0.010986328125,
+        "west": -0.010986328125
+      },
+      "summary": {
+        "total_segments": 0,
+        "congested_segments": 0,
+        "average_speed_ratio": 0.0
+      },
+      "metrics": null
+    }
+  ]
+}

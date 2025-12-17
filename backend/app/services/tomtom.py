@@ -7,8 +7,25 @@ import hashlib
 from datetime import datetime
 from typing import Optional
 import httpx
+import logging
 
 from ..core.config import get_settings
+from ..core.logging import get_logger
+from ..services.cache import cache_response
+from ..constants import (
+    TOMTOM_BASE_URL,
+    HTTP_TIMEOUT_SECONDS,
+    GRID_SIZE_LARGE_AREA,
+    GRID_SIZE_MEDIUM_AREA,
+    GRID_SIZE_SMALL_AREA,
+    GRID_SIZE_VERY_LARGE,
+    GRID_SIZE_LARGE,
+    GRID_SIZE_MEDIUM,
+    GRID_SIZE_SMALL,
+    MAX_CONCURRENT_REQUESTS,
+    DEFAULT_ZOOM_LEVEL,
+    DETAILED_ZOOM_LEVEL,
+)
 from ..models.traffic import (
     BoundingBox,
     Coordinates,
@@ -17,6 +34,9 @@ from ..models.traffic import (
     TrafficFlowData,
     TrafficIncident,
 )
+from ..utils.coordinates import validate_coordinates, validate_bounding_box, calculate_bounding_box_area
+
+logger = get_logger(__name__)
 
 
 class TomTomService:
@@ -33,7 +53,7 @@ class TomTomService:
         _client: Lazy-loaded async HTTP client for making API requests
     """
     
-    BASE_URL = "https://api.tomtom.com"
+    BASE_URL = TOMTOM_BASE_URL
     
     def __init__(self):
         """Initialize TomTom service with API key from settings."""
@@ -49,10 +69,10 @@ class TomTomService:
         Reuses existing client if it's still open.
         
         Returns:
-            httpx.AsyncClient: Configured async HTTP client with 30s timeout
+            httpx.AsyncClient: Configured async HTTP client
         """
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=30.0)
+            self._client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS)
         return self._client
     
     async def close(self):
@@ -150,9 +170,10 @@ class TomTomService:
             
         except httpx.HTTPError as e:
             # Log error but don't crash - return None so calling code can handle it
-            print(f"Error fetching flow segment data: {e}")
+            logger.error(f"Error fetching flow segment data: {e}", exc_info=True)
             return None
     
+    @cache_response(ttl_minutes=5, key_prefix="traffic_flow")
     async def get_traffic_flow_tiles(
         self,
         bbox: BoundingBox,
@@ -191,29 +212,24 @@ class TomTomService:
         """
         import asyncio
         
+        # Validate bounding box
+        is_valid, error_msg = validate_bounding_box(bbox)
+        if not is_valid:
+            raise ValueError(error_msg)
+        
         # Calculate area in square degrees (approximate)
-        # This is needed for both grid size calculation and secondary grid logic
-        area = (bbox.north - bbox.south) * (bbox.east - bbox.west)
+        area = calculate_bounding_box_area(bbox)
         
         # Calculate adaptive grid size based on bounding box area
-        # Larger areas need more samples for good coverage
-        # Smaller areas need fewer samples (performance)
         if grid_size is None:
-            # Adaptive grid sizing with increased density for better road coverage:
-            # More sample points = better chance of hitting all roads
-            # - Very large areas (>1000 sq degrees): 12x12 = 144 points
-            # - Large areas (100-1000): 12x12 = 144 points  
-            # - Medium areas (10-100): 10x10 = 100 points
-            # - Small areas (<10): 8x8 = 64 points
-            # Increased grid density ensures we don't miss roads between sample points
-            if area > 1000:
-                grid_size = 12  # More points for better coverage
-            elif area > 100:
-                grid_size = 12  # More points for better coverage
-            elif area > 10:
-                grid_size = 10  # Increased from 8
+            if area > GRID_SIZE_LARGE_AREA:
+                grid_size = GRID_SIZE_VERY_LARGE
+            elif area > GRID_SIZE_MEDIUM_AREA:
+                grid_size = GRID_SIZE_LARGE
+            elif area > GRID_SIZE_SMALL_AREA:
+                grid_size = GRID_SIZE_MEDIUM
             else:
-                grid_size = 8   # Increased from 6
+                grid_size = GRID_SIZE_SMALL
         
         # Calculate step size for grid sampling
         # Divides the bounding box into a grid of sample points
@@ -236,7 +252,7 @@ class TomTomService:
         
         # Secondary grid: offset by 1/3 to catch roads missed by primary grid
         # Only add if area is small enough (to avoid too many API calls)
-        if area < 100:  # Only for smaller areas to avoid excessive API calls
+        if area < GRID_SIZE_MEDIUM_AREA:
             for i in range(grid_size):
                 for j in range(grid_size):
                     # Offset by 1/3 in both directions
@@ -249,22 +265,16 @@ class TomTomService:
                         points.append(point)
         
         # Fetch all segments in parallel with concurrency limiting
-        # Increased concurrency limit to 15 (from 10) for faster data fetching
-        # TomTom API can handle this, and it improves coverage speed
-        semaphore = asyncio.Semaphore(15)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         
         async def fetch_with_limit(point: Coordinates):
             """
             Wrapper function that respects concurrency limit.
-            Only 10 requests will run simultaneously.
             
-            Uses zoom level 12 for detailed road segments.
-            Higher zoom = more detailed segments, better road coverage.
+            Uses detailed zoom level for better road coverage.
             """
             async with semaphore:
-                # Use zoom 12 for detailed segments (was 12, keeping it)
-                # Zoom 12 gives good detail without being too granular
-                return await self.get_flow_segment_data(point, zoom=12)
+                return await self.get_flow_segment_data(point, zoom=DETAILED_ZOOM_LEVEL)
         
         # Execute all requests in parallel
         # return_exceptions=True allows us to handle individual failures gracefully
@@ -277,7 +287,7 @@ class TomTomService:
         for result in results:
             # Skip exceptions (logged but don't fail entire request)
             if isinstance(result, Exception):
-                print(f"Error fetching segment: {result}")
+                logger.warning(f"Error fetching segment: {result}")
                 continue
             
             # Skip None results (API returned no data for this point)
@@ -321,6 +331,7 @@ class TomTomService:
     # TRAFFIC INCIDENTS API
     # ============================================================
     
+    @cache_response(ttl_minutes=2, key_prefix="incidents")
     async def get_incidents(
         self,
         bbox: BoundingBox
@@ -387,7 +398,7 @@ class TomTomService:
             return incidents
             
         except httpx.HTTPError as e:
-            print(f"Error fetching incidents: {e}")
+            logger.error(f"Error fetching incidents: {e}", exc_info=True)
             return []
     
     # ============================================================
@@ -441,30 +452,53 @@ class TomTomService:
             
             results = []
             for result in data.get("results", [])[:limit]:
-                position = result.get("position", {})
-                viewport = result.get("viewport", {})
-                
-                results.append({
-                    "name": result.get("poi", {}).get("name") or result.get("address", {}).get("freeformAddress") or result.get("address", {}).get("municipality") or query,
-                    "coordinates": {
-                        "lat": position.get("lat"),
-                        "lng": position.get("lon"),
-                    },
-                    "bounds": {
-                        "north": viewport.get("topLeftPoint", {}).get("lat") or position.get("lat") + 0.01,
-                        "south": viewport.get("bottomRightPoint", {}).get("lat") or position.get("lat") - 0.01,
-                        "east": viewport.get("bottomRightPoint", {}).get("lon") or position.get("lon") + 0.01,
-                        "west": viewport.get("topLeftPoint", {}).get("lon") or position.get("lon") - 0.01,
-                    },
-                    "type": result.get("type", "unknown"),
-                    "address": result.get("address", {}).get("freeformAddress", ""),
-                })
+                try:
+                    position = result.get("position", {})
+                    viewport = result.get("viewport", {})
+                    
+                    # Validate position
+                    lat = position.get("lat")
+                    lon = position.get("lon")
+                    if lat is None or lon is None:
+                        continue
+                    
+                    lat = float(lat)
+                    lon = float(lon)
+                    
+                    # Validate coordinates using utility
+                    coord = Coordinates(lat=lat, lng=lon)
+                    is_valid, _ = validate_coordinates(coord)
+                    if not is_valid:
+                        continue
+                    
+                    # Get bounds with fallbacks
+                    top_left = viewport.get("topLeftPoint", {})
+                    bottom_right = viewport.get("bottomRightPoint", {})
+                    
+                    results.append({
+                        "name": result.get("poi", {}).get("name") or result.get("address", {}).get("freeformAddress") or result.get("address", {}).get("municipality") or query,
+                        "coordinates": {
+                            "lat": lat,
+                            "lng": lon,
+                        },
+                        "bounds": {
+                            "north": top_left.get("lat") or lat + 0.01,
+                            "south": bottom_right.get("lat") or lat - 0.01,
+                            "east": bottom_right.get("lon") or lon + 0.01,
+                            "west": top_left.get("lon") or lon - 0.01,
+                        },
+                        "type": result.get("type", "unknown"),
+                        "address": result.get("address", {}).get("freeformAddress", ""),
+                    })
+                except (ValueError, TypeError, KeyError) as e:
+                    logger.warning(f"Error processing search result: {e}")
+                    continue
             
             return results
             
         except Exception as e:
             # Fallback to OpenStreetMap Nominatim (free, no API key needed)
-            print(f"TomTom search failed, trying OpenStreetMap: {e}")
+            logger.warning(f"TomTom search failed, trying OpenStreetMap: {e}")
             try:
                 nominatim_url = "https://nominatim.openstreetmap.org/search"
                 params = {
@@ -483,27 +517,48 @@ class TomTomService:
                 
                 results = []
                 for result in data[:limit]:
-                    bounds = result.get("boundingbox", [])
-                    results.append({
-                        "name": result.get("display_name", "").split(",")[0] or query,
-                        "coordinates": {
-                            "lat": float(result.get("lat", 0)),
-                            "lng": float(result.get("lon", 0)),
-                        },
-                        "bounds": {
-                            "north": float(bounds[1]) if len(bounds) > 1 else float(result.get("lat", 0)) + 0.01,
-                            "south": float(bounds[0]) if len(bounds) > 0 else float(result.get("lat", 0)) - 0.01,
-                            "east": float(bounds[3]) if len(bounds) > 3 else float(result.get("lon", 0)) + 0.01,
-                            "west": float(bounds[2]) if len(bounds) > 2 else float(result.get("lon", 0)) - 0.01,
-                        },
-                        "type": result.get("type", "unknown"),
-                        "address": result.get("display_name", ""),
-                    })
+                    try:
+                        lat_str = result.get("lat")
+                        lon_str = result.get("lon")
+                        
+                        if not lat_str or not lon_str:
+                            continue
+                        
+                        lat = float(lat_str)
+                        lon = float(lon_str)
+                        
+                        # Validate coordinates using utility
+                        coord = Coordinates(lat=lat, lng=lon)
+                        is_valid, _ = validate_coordinates(coord)
+                        if not is_valid:
+                            continue
+                        
+                        bounds = result.get("boundingbox", [])
+                        display_name = result.get("display_name", "")
+                        
+                        results.append({
+                            "name": display_name.split(",")[0] if display_name else query,
+                            "coordinates": {
+                                "lat": lat,
+                                "lng": lon,
+                            },
+                            "bounds": {
+                                "north": float(bounds[1]) if len(bounds) > 1 and bounds[1] else lat + 0.01,
+                                "south": float(bounds[0]) if len(bounds) > 0 and bounds[0] else lat - 0.01,
+                                "east": float(bounds[3]) if len(bounds) > 3 and bounds[3] else lon + 0.01,
+                                "west": float(bounds[2]) if len(bounds) > 2 and bounds[2] else lon - 0.01,
+                            },
+                            "type": result.get("type", "unknown"),
+                            "address": display_name,
+                        })
+                    except (ValueError, TypeError, KeyError) as e:
+                        logger.warning(f"Error processing Nominatim result: {e}")
+                        continue
                 
                 return results
                 
             except Exception as fallback_error:
-                print(f"OpenStreetMap search also failed: {fallback_error}")
+                logger.error(f"OpenStreetMap search also failed: {fallback_error}", exc_info=True)
                 return []
     
     def _map_incident_type(self, icon_category: int) -> str:
@@ -546,6 +601,15 @@ class TomTomService:
         Returns:
             List of route dictionaries with geometry, distance, time, and delays
         """
+        # Validate coordinates using utility
+        is_valid_start, error_start = validate_coordinates(start, "start")
+        if not is_valid_start:
+            raise ValueError(error_start)
+        
+        is_valid_end, error_end = validate_coordinates(end, "end")
+        if not is_valid_end:
+            raise ValueError(error_end)
+        
         client = await self.get_client()
         
         try:
@@ -571,24 +635,42 @@ class TomTomService:
                 # Extract geometry (coordinates)
                 geometry = []
                 for leg in legs:
-                    for point in leg.get("points", []):
-                        geometry.append({
-                            "lat": point.get("latitude"),
-                            "lng": point.get("longitude"),
-                        })
+                    points = leg.get("points", [])
+                    if not points:
+                        # Try alternative structure
+                        points = leg.get("geometry", {}).get("coordinates", [])
+                    
+                    for point in points:
+                        # Handle different point formats
+                        if isinstance(point, dict):
+                            lat = point.get("latitude") or point.get("lat")
+                            lng = point.get("longitude") or point.get("lon") or point.get("lng")
+                        elif isinstance(point, list) and len(point) >= 2:
+                            # GeoJSON format: [lng, lat]
+                            lng, lat = point[0], point[1]
+                        else:
+                            continue
+                        
+                        if lat is not None and lng is not None:
+                            geometry.append({
+                                "lat": float(lat),
+                                "lng": float(lng),
+                            })
                 
-                routes.append({
-                    "distance": summary.get("lengthInMeters", 0) / 1000,  # Convert to km
-                    "time": summary.get("travelTimeInSeconds", 0),  # seconds
-                    "delay": summary.get("delayInSeconds", 0),  # seconds
-                    "geometry": geometry,
-                    "instructions": self._extract_instructions(route_data),
-                })
+                # Only add route if it has valid geometry
+                if geometry:
+                    routes.append({
+                        "distance": summary.get("lengthInMeters", 0) / 1000,  # Convert to km
+                        "time": summary.get("travelTimeInSeconds", 0),  # seconds
+                        "delay": summary.get("delayInSeconds", 0),  # seconds
+                        "geometry": geometry,
+                        "instructions": self._extract_instructions(route_data),
+                    })
             
             return routes
             
         except Exception as e:
-            print(f"Error calculating route: {e}")
+            logger.error(f"Error calculating route: {e}", exc_info=True)
             return []
     
     def _extract_instructions(self, route_data: dict) -> list[dict]:
